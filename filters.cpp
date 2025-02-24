@@ -7,15 +7,18 @@ cv::Mat image, original_image;
 GtkWidget *image_area;
 GtkWidget *scrolled_window; 
 
-void apply_pixel_filter(std::function<cv::Vec3b(cv::Vec3b)> filter) {
+void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
     if (image.empty()) return;
 
-    for (int y = 0; y < image.rows; y++) {
-        for (int x = 0; x < image.cols; x++) {
-            cv::Vec3b &pixel = image.at<cv::Vec3b>(y, x);
-            pixel = filter(pixel);
+    cv::Mat new_image = image.clone(); 
+
+    for (int y = 1; y < image.rows - 1; y++) {  
+        for (int x = 1; x < image.cols - 1; x++) {
+            new_image.at<cv::Vec3b>(y, x) = filter(image, x, y);
         }
     }
+
+    image = new_image; 
 
     GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
         image.data, GDK_COLORSPACE_RGB, FALSE, 8,
@@ -55,7 +58,8 @@ void load_image(GtkWidget *widget, gpointer data) {
 }
 
 void apply_inversion(GtkWidget *widget, gpointer data) {
-    apply_pixel_filter([](cv::Vec3b pixel) -> cv::Vec3b {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
         return cv::Vec3b(255 - pixel[0], 255 - pixel[1], 255 - pixel[2]);
     });
 }
