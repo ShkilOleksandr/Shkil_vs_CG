@@ -5,20 +5,18 @@
 
 cv::Mat image, original_image;
 GtkWidget *image_area;
-GtkWidget *scrolled_window;  // Scrollable container
+GtkWidget *scrolled_window; 
 
-// Function to apply a pixel-wise filter using a lambda function
 void apply_pixel_filter(std::function<cv::Vec3b(cv::Vec3b)> filter) {
     if (image.empty()) return;
 
     for (int y = 0; y < image.rows; y++) {
         for (int x = 0; x < image.cols; x++) {
             cv::Vec3b &pixel = image.at<cv::Vec3b>(y, x);
-            pixel = filter(pixel);  // Apply lambda function to modify pixel
+            pixel = filter(pixel);
         }
     }
 
-    // Convert OpenCV image to GTK Pixbuf
     GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
         image.data, GDK_COLORSPACE_RGB, FALSE, 8,
         image.cols, image.rows, image.step, NULL, NULL
@@ -26,7 +24,6 @@ void apply_pixel_filter(std::function<cv::Vec3b(cv::Vec3b)> filter) {
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
 }
 
-// Function to load an image
 void load_image(GtkWidget *widget, gpointer data) {
     GtkWidget *dialog = gtk_file_chooser_dialog_new("Open Image",
         GTK_WINDOW(data),
@@ -52,23 +49,20 @@ void load_image(GtkWidget *widget, gpointer data) {
         );
 
         gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
-        gtk_widget_set_size_request(image_area, image.cols, image.rows);  // Ensure scrollbars work
+        gtk_widget_set_size_request(image_area, image.cols, image.rows);
     }
     gtk_widget_destroy(dialog);
 }
 
-// Function to apply inversion filter
 void apply_inversion(GtkWidget *widget, gpointer data) {
     apply_pixel_filter([](cv::Vec3b pixel) -> cv::Vec3b {
-        return cv::Vec3b(255 - pixel[0], 255 - pixel[1], 255 - pixel[2]);  // Invert each color channel
+        return cv::Vec3b(255 - pixel[0], 255 - pixel[1], 255 - pixel[2]);
     });
 }
 
-// Function to restore the original image
 void restore_original(GtkWidget *widget, gpointer data) {
     if (original_image.empty()) return;
 
-    // Convert from BGR to RGB before displaying
     cv::cvtColor(original_image, image, cv::COLOR_BGR2RGB);
 
     GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
@@ -80,7 +74,6 @@ void restore_original(GtkWidget *widget, gpointer data) {
 }
 
 
-// Function to save an image
 void save_image(GtkWidget *widget, gpointer data) {
     if (image.empty()) {
         std::cerr << "Error: No image to save!" << std::endl;
@@ -116,11 +109,9 @@ void save_image(GtkWidget *widget, gpointer data) {
     gtk_widget_destroy(dialog);
 }
 
-// Function to create a menu bar
 GtkWidget* create_menu_bar(GtkWidget *window) {
     GtkWidget *menu_bar = gtk_menu_bar_new();
 
-    // File Menu
     GtkWidget *file_menu = gtk_menu_new();
     GtkWidget *file_menu_item = gtk_menu_item_new_with_label("File");
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_menu_item), file_menu);
@@ -139,7 +130,6 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
 
-    // Filters Menu
     GtkWidget *filter_menu = gtk_menu_new();
     GtkWidget *filter_menu_item = gtk_menu_item_new_with_label("Filters");
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(filter_menu_item), filter_menu);
@@ -169,17 +159,14 @@ int main(int argc, char *argv[]) {
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_add(GTK_CONTAINER(window), vbox);
 
-    // Add the menu bar
     GtkWidget *menu_bar = create_menu_bar(window);
     gtk_box_pack_start(GTK_BOX(vbox), menu_bar, FALSE, FALSE, 0);
 
-    // Create a scrolled window
     scrolled_window = gtk_scrolled_window_new(NULL, NULL);
     gtk_widget_set_vexpand(scrolled_window, TRUE);
     gtk_widget_set_hexpand(scrolled_window, TRUE);
     gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 5);
 
-    // Create an image widget inside the scrolled window
     image_area = gtk_image_new();
     gtk_container_add(GTK_CONTAINER(scrolled_window), image_area);
 
