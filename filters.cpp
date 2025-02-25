@@ -140,10 +140,27 @@ void apply_blur(GtkWidget *widget, gpointer data) {
     });
 }
 
+cv::Mat generate_gauss_kernel(int size, double sigma) {
+    cv::Mat kernel(size, size, CV_64F);
+    double sum = 0.0;
+    int half_size = size / 2;
+
+    for (int y = -half_size; y <= half_size; y++) {
+        for (int x = -half_size; x <= half_size; x++) {
+            double value = (1.0 / (2.0 * M_PI * sigma * sigma)) * 
+                           exp(-(x * x + y * y) / (2.0 * sigma * sigma));
+            kernel.at<double>(y + half_size, x + half_size) = value;
+            sum += value;
+        }
+    }
+    kernel /= sum;
+
+    return kernel;
+}
+
 void apply_gaussblur(GtkWidget *widget, gpointer data) {
     
-    cv::Mat kernel1D = cv::getGaussianKernel(kernel_size, sigma, CV_64F);
-    cv::Mat kernel2D = kernel1D * kernel1D.t(); 
+    cv::Mat kernel2D = generate_gauss_kernel(kernel_size, sigma);
 
     apply_filter([kernel2D](const cv::Mat &img, int x, int y) -> cv::Vec3b {
         cv::Vec3d sum(0, 0, 0); 
