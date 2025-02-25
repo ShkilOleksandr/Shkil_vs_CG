@@ -2,10 +2,13 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <functional>
+#include <math.h>
 
 cv::Mat image, original_image;
 GtkWidget *image_area;
 GtkWidget *scrolled_window; 
+int dbrightness = 20;
+double gamma_coeff = 3.0;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
     if (image.empty()) return;
@@ -64,6 +67,46 @@ void apply_inversion(GtkWidget *widget, gpointer data) {
     });
 }
 
+void apply_more_brightness(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        return cv::Vec3b(std::min(pixel[0] + dbrightness, 255), 
+                         std::min(pixel[1] + dbrightness, 255), 
+                         std::min(pixel[2] + dbrightness, 255));
+    });
+}
+
+void apply_less_brightness(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        return cv::Vec3b(std::max(pixel[0] - dbrightness, 0), 
+                         std::max(pixel[1] - dbrightness, 0), 
+                         std::max(pixel[2] - dbrightness, 0));
+    });
+}
+
+void apply_gamma_bright(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        return cv::Vec3b(
+            std::floor(255 * pow(static_cast<double>(pixel[0]) / 255.0, 1.0 / gamma_coeff)),
+            std::floor(255 * pow(static_cast<double>(pixel[1]) / 255.0, 1.0 / gamma_coeff)),
+            std::floor(255 * pow(static_cast<double>(pixel[2]) / 255.0, 1.0 / gamma_coeff))
+        );
+    });
+}
+
+void apply_gamma_dark(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        return cv::Vec3b(
+            std::ceil(255 * pow(static_cast<double>(pixel[0]) / 255.0, gamma_coeff)),
+            std::ceil(255 * pow(static_cast<double>(pixel[1]) / 255.0, gamma_coeff)),
+            std::ceil(255 * pow(static_cast<double>(pixel[2]) / 255.0, gamma_coeff))
+        );
+    });
+}
+
 void restore_original(GtkWidget *widget, gpointer data) {
     if (original_image.empty()) return;
 
@@ -76,7 +119,6 @@ void restore_original(GtkWidget *widget, gpointer data) {
 
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
 }
-
 
 void save_image(GtkWidget *widget, gpointer data) {
     if (image.empty()) {
@@ -139,12 +181,24 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(filter_menu_item), filter_menu);
 
     GtkWidget *invert_item = gtk_menu_item_new_with_label("Invert Colors");
+    GtkWidget *add_brightness = gtk_menu_item_new_with_label("Add brightness");
+    GtkWidget *remove_brightness = gtk_menu_item_new_with_label("Remove brightness");
+    GtkWidget *add_gamma = gtk_menu_item_new_with_label("Gamma bright");
+    GtkWidget *remove_gamma = gtk_menu_item_new_with_label("Gamma dark");
     GtkWidget *restore_item = gtk_menu_item_new_with_label("Restore Original");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), invert_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_brightness);
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_brightness);
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_gamma);
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_gamma);
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), restore_item);
 
     g_signal_connect(invert_item, "activate", G_CALLBACK(apply_inversion), NULL);
+    g_signal_connect(add_brightness, "activate", G_CALLBACK(apply_more_brightness),NULL);
+    g_signal_connect(remove_brightness, "activate", G_CALLBACK(apply_less_brightness),NULL);
+    g_signal_connect(add_gamma, "activate", G_CALLBACK(apply_gamma_bright),NULL);
+    g_signal_connect(remove_gamma, "activate", G_CALLBACK(apply_gamma_dark),NULL);
     g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), filter_menu_item);
