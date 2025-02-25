@@ -12,8 +12,10 @@ double gamma_coeff = 3.0;
 int contrast_center = 127;
 double contrast_coeff = 2.0;
 
-int kernel_width = 3;
-int kernel_height = 3;
+
+int kernel_size = 3;
+double sigma = 1.0;
+
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
     if (image.empty()) return;
@@ -125,16 +127,39 @@ void apply_contrast(GtkWidget *widget, gpointer data) {
 
 void apply_blur(GtkWidget *widget, gpointer data) {
     apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
-        cv::Vec3i sum(0, 0, 0);  // Using Vec3i to prevent overflow
-        for (int y_counter = -kernel_height / 2; y_counter <= kernel_height / 2; y_counter++) {
-            for (int x_counter = -kernel_width / 2; x_counter <= kernel_width / 2; x_counter++) {
+        cv::Vec3i sum(0, 0, 0); 
+        for (int y_counter = -kernel_size / 2; y_counter <= kernel_size / 2; y_counter++) {
+            for (int x_counter = -kernel_size / 2; x_counter <= kernel_size / 2; x_counter++) {
 
-                sum += img.at<cv::Vec3b>(std::min(std::max(y + y_counter, 0), img.rows), 
-                                         std::min(std::max(x + x_counter, 0), img.cols));
+                sum += img.at<cv::Vec3b>(std::min(std::max(y + y_counter, 0), img.rows - 1), 
+                                         std::min(std::max(x + x_counter, 0), img.cols - 1));
 
             }
         }
-        return sum / (kernel_height * kernel_width);
+        return sum / (kernel_size * kernel_size);
+    });
+}
+
+void apply_gaussblur(GtkWidget *widget, gpointer data) {
+    
+    cv::Mat kernel1D = cv::getGaussianKernel(kernel_size, sigma, CV_64F);
+    cv::Mat kernel2D = kernel1D * kernel1D.t(); 
+
+    apply_filter([kernel2D](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3d sum(0, 0, 0); 
+        for (int y_counter = -kernel_size / 2; y_counter <= kernel_size / 2; y_counter++) {
+            for (int x_counter = -kernel_size / 2; x_counter <= kernel_size / 2; x_counter++) {
+
+                double weight = kernel2D.at<double>(y_counter + kernel_size / 2, x_counter + kernel_size / 2);
+                sum += weight * static_cast<cv::Vec3d>(img.at<cv::Vec3b>(std::min(std::max(y + y_counter, 0), img.rows - 1),
+                                                                         std::min(std::max(x + x_counter, 0), img.cols - 1)));
+            }
+        }
+        return cv::Vec3b(
+            cv::saturate_cast<uchar>(std::ceil(sum[0])),
+            cv::saturate_cast<uchar>(std::ceil(sum[1])),
+            cv::saturate_cast<uchar>(std::ceil(sum[2]))
+        );
     });
 }
 
@@ -247,10 +272,13 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(kfilter_menu_item), kfilter_menu);
 
     GtkWidget *blur_option = gtk_menu_item_new_with_label("Blur");
+    GtkWidget *gaussblur_option = gtk_menu_item_new_with_label("Gauss Smoothing");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), blur_option);
+    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), gaussblur_option);
 
     g_signal_connect(blur_option, "activate", G_CALLBACK(apply_blur), NULL);
+    g_signal_connect(gaussblur_option, "activate", G_CALLBACK(apply_gaussblur), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
 }
