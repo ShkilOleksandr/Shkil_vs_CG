@@ -9,6 +9,8 @@ GtkWidget *image_area;
 GtkWidget *scrolled_window; 
 int dbrightness = 20;
 double gamma_coeff = 3.0;
+int kernel_width = 3;
+int kernel_height = 3;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
     if (image.empty()) return;
@@ -107,6 +109,21 @@ void apply_gamma_dark(GtkWidget *widget, gpointer data) {
     });
 }
 
+void apply_blur(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3i sum(0, 0, 0);  // Using Vec3i to prevent overflow
+        for (int y_counter = -kernel_height / 2; y_counter <= kernel_height / 2; y_counter++) {
+            for (int x_counter = -kernel_width / 2; x_counter <= kernel_width / 2; x_counter++) {
+
+                sum += img.at<cv::Vec3b>(std::min(std::max(y + y_counter, 0), img.rows), 
+                                         std::min(std::max(x + x_counter, 0), img.cols));
+
+            }
+        }
+        return sum / (kernel_height * kernel_width);
+    });
+}
+
 void restore_original(GtkWidget *widget, gpointer data) {
     if (original_image.empty()) return;
 
@@ -176,6 +193,8 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
 
+    //Pixel filters
+{
     GtkWidget *filter_menu = gtk_menu_new();
     GtkWidget *filter_menu_item = gtk_menu_item_new_with_label("Filters");
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(filter_menu_item), filter_menu);
@@ -202,7 +221,22 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), filter_menu_item);
+}
 
+    // Kernel filters
+{
+    GtkWidget *kfilter_menu = gtk_menu_new();
+    GtkWidget *kfilter_menu_item = gtk_menu_item_new_with_label("Kernel Filters");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(kfilter_menu_item), kfilter_menu);
+
+    GtkWidget *blur_option = gtk_menu_item_new_with_label("Blur");
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), blur_option);
+
+    g_signal_connect(blur_option, "activate", G_CALLBACK(apply_blur), NULL);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
+}
     return menu_bar;
 }
 
