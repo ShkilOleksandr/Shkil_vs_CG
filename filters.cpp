@@ -186,6 +186,26 @@ cv::Mat generate_diagonal_kernel(int size) {
     return kernel;
 }
 
+cv::Mat generate_southemboss_kernel(int size) {
+    cv::Mat kernel = cv::Mat::zeros(size, size, CV_64F); 
+    int half_size = size / 2;
+
+    for (int y = 0; y < half_size; y++) {
+        for (int x = 0; x < size; x++) {
+            kernel.at<double>(y, x) = -1;
+        }
+    }
+
+    kernel.at<double>(half_size, half_size) = 1;
+
+    for (int y = half_size + 1; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            kernel.at<double>(y, x) = 1;
+        }
+    }
+
+    return kernel;
+}
 
 void apply_gaussblur(GtkWidget *widget, gpointer data) {
     
@@ -234,6 +254,28 @@ void apply_sharpen(GtkWidget *widget, gpointer data) {
 void apply_edges(GtkWidget *widget, gpointer data) {
     
     cv::Mat kernel2D = generate_diagonal_kernel(kernel_size);
+
+    apply_filter([kernel2D](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3d sum(0, 0, 0); 
+        for (int y_counter = -kernel_size / 2; y_counter <= kernel_size / 2; y_counter++) {
+            for (int x_counter = -kernel_size / 2; x_counter <= kernel_size / 2; x_counter++) {
+
+                double weight = kernel2D.at<double>(y_counter + kernel_size / 2, x_counter + kernel_size / 2);
+                sum += weight * static_cast<cv::Vec3d>(img.at<cv::Vec3b>(std::min(std::max(y + y_counter, 0), img.rows - 1),
+                                                                         std::min(std::max(x + x_counter, 0), img.cols - 1)));
+            }
+        }
+        return cv::Vec3b(
+            cv::saturate_cast<uchar>(sum[0]),
+            cv::saturate_cast<uchar>(sum[1]),
+            cv::saturate_cast<uchar>(sum[2])
+        );
+    });
+}
+
+void apply_emboss(GtkWidget *widget, gpointer data) {
+    
+    cv::Mat kernel2D = generate_southemboss_kernel(kernel_size);
 
     apply_filter([kernel2D](const cv::Mat &img, int x, int y) -> cv::Vec3b {
         cv::Vec3d sum(0, 0, 0); 
@@ -302,6 +344,9 @@ void save_image(GtkWidget *widget, gpointer data) {
 }
 
 GtkWidget* create_menu_bar(GtkWidget *window) {
+
+    // Setting up the menu bar
+
     GtkWidget *menu_bar = gtk_menu_bar_new();
 
     GtkWidget *file_menu = gtk_menu_new();
@@ -321,6 +366,7 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     g_signal_connect(exit_item, "activate", G_CALLBACK(gtk_main_quit), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
+
 
     //Pixel filters
 {
@@ -365,16 +411,19 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     GtkWidget *gaussblur_option = gtk_menu_item_new_with_label("Gauss Smoothing");
     GtkWidget *sharpen_option = gtk_menu_item_new_with_label("Sharpening");
     GtkWidget *edges_option = gtk_menu_item_new_with_label("Edge Detection");
+    GtkWidget *emboss_option = gtk_menu_item_new_with_label("Emboss Filter");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), blur_option);
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), gaussblur_option);
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), sharpen_option);
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), edges_option);
+    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), emboss_option);
 
     g_signal_connect(blur_option, "activate", G_CALLBACK(apply_blur), NULL);
     g_signal_connect(gaussblur_option, "activate", G_CALLBACK(apply_gaussblur), NULL);
     g_signal_connect(sharpen_option, "activate", G_CALLBACK(apply_sharpen), NULL);
     g_signal_connect(edges_option, "activate", G_CALLBACK(apply_edges), NULL);
+    g_signal_connect(emboss_option, "activate", G_CALLBACK(apply_emboss), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
 }
