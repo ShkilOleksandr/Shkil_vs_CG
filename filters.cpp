@@ -9,6 +9,9 @@ GtkWidget *image_area;
 GtkWidget *scrolled_window; 
 int dbrightness = 20;
 double gamma_coeff = 3.0;
+int contrast_center = 127;
+double contrast_coeff = 2.0;
+
 int kernel_width = 3;
 int kernel_height = 3;
 
@@ -109,6 +112,17 @@ void apply_gamma_dark(GtkWidget *widget, gpointer data) {
     });
 }
 
+void apply_contrast(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        return cv::Vec3b(
+            static_cast<uchar>(std::max(std::min(std::ceil((static_cast<double>(pixel[0]) - contrast_center) * contrast_coeff + contrast_center), 255.0), 0.0)),
+            static_cast<uchar>(std::max(std::min(std::ceil((static_cast<double>(pixel[1]) - contrast_center) * contrast_coeff + contrast_center), 255.0), 0.0)),
+            static_cast<uchar>(std::max(std::min(std::ceil((static_cast<double>(pixel[2]) - contrast_center) * contrast_coeff + contrast_center), 255.0), 0.0))
+        );
+    });
+}
+
 void apply_blur(GtkWidget *widget, gpointer data) {
     apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
         cv::Vec3i sum(0, 0, 0);  // Using Vec3i to prevent overflow
@@ -202,6 +216,7 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     GtkWidget *invert_item = gtk_menu_item_new_with_label("Invert Colors");
     GtkWidget *add_brightness = gtk_menu_item_new_with_label("Add brightness");
     GtkWidget *remove_brightness = gtk_menu_item_new_with_label("Remove brightness");
+    GtkWidget *contrast_option = gtk_menu_item_new_with_label("Contrast");
     GtkWidget *add_gamma = gtk_menu_item_new_with_label("Gamma bright");
     GtkWidget *remove_gamma = gtk_menu_item_new_with_label("Gamma dark");
     GtkWidget *restore_item = gtk_menu_item_new_with_label("Restore Original");
@@ -209,6 +224,7 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), invert_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_brightness);
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_brightness);
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), contrast_option);
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_gamma);
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_gamma);
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), restore_item);
@@ -216,6 +232,7 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     g_signal_connect(invert_item, "activate", G_CALLBACK(apply_inversion), NULL);
     g_signal_connect(add_brightness, "activate", G_CALLBACK(apply_more_brightness),NULL);
     g_signal_connect(remove_brightness, "activate", G_CALLBACK(apply_less_brightness),NULL);
+    g_signal_connect(contrast_option, "activate", G_CALLBACK(apply_contrast),NULL);
     g_signal_connect(add_gamma, "activate", G_CALLBACK(apply_gamma_bright),NULL);
     g_signal_connect(remove_gamma, "activate", G_CALLBACK(apply_gamma_dark),NULL);
     g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
