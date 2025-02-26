@@ -4,6 +4,7 @@
 #include <functional>
 #include <math.h>
 #include <vector>
+#include <fstream> 
 
 cv::Mat image, original_image;
 GtkWidget *image_area;
@@ -355,93 +356,6 @@ void save_image(GtkWidget *widget, gpointer data) {
     gtk_widget_destroy(dialog);
 }
 
-GtkWidget* create_menu_bar(GtkWidget *window) {
-
-    // Setting up the menu bar
-
-    GtkWidget *menu_bar = gtk_menu_bar_new();
-
-    GtkWidget *file_menu = gtk_menu_new();
-    GtkWidget *file_menu_item = gtk_menu_item_new_with_label("File");
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_menu_item), file_menu);
-
-    GtkWidget *load_item = gtk_menu_item_new_with_label("Load Image");
-    GtkWidget *save_item = gtk_menu_item_new_with_label("Save Image");
-    GtkWidget *exit_item = gtk_menu_item_new_with_label("Exit");
-
-    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), load_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), save_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), exit_item);
-
-    g_signal_connect(load_item, "activate", G_CALLBACK(load_image), window);
-    g_signal_connect(save_item, "activate", G_CALLBACK(save_image), window);
-    g_signal_connect(exit_item, "activate", G_CALLBACK(gtk_main_quit), NULL);
-
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
-
-
-    //Pixel filters
-{
-    GtkWidget *filter_menu = gtk_menu_new();
-    GtkWidget *filter_menu_item = gtk_menu_item_new_with_label("Filters");
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(filter_menu_item), filter_menu);
-
-    GtkWidget *invert_item = gtk_menu_item_new_with_label("Invert Colors");
-    GtkWidget *add_brightness = gtk_menu_item_new_with_label("Add brightness");
-    GtkWidget *remove_brightness = gtk_menu_item_new_with_label("Remove brightness");
-    GtkWidget *contrast_option = gtk_menu_item_new_with_label("Contrast");
-    GtkWidget *add_gamma = gtk_menu_item_new_with_label("Gamma bright");
-    GtkWidget *remove_gamma = gtk_menu_item_new_with_label("Gamma dark");
-    GtkWidget *restore_item = gtk_menu_item_new_with_label("Restore Original");
-
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), invert_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_brightness);
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_brightness);
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), contrast_option);
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_gamma);
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_gamma);
-    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), restore_item);
-
-    g_signal_connect(invert_item, "activate", G_CALLBACK(apply_inversion), NULL);
-    g_signal_connect(add_brightness, "activate", G_CALLBACK(apply_more_brightness),NULL);
-    g_signal_connect(remove_brightness, "activate", G_CALLBACK(apply_less_brightness),NULL);
-    g_signal_connect(contrast_option, "activate", G_CALLBACK(apply_contrast),NULL);
-    g_signal_connect(add_gamma, "activate", G_CALLBACK(apply_gamma_bright),NULL);
-    g_signal_connect(remove_gamma, "activate", G_CALLBACK(apply_gamma_dark),NULL);
-    g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
-
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), filter_menu_item);
-}
-
-    // Kernel filters
-{
-    GtkWidget *kfilter_menu = gtk_menu_new();
-    GtkWidget *kfilter_menu_item = gtk_menu_item_new_with_label("Kernel Filters");
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(kfilter_menu_item), kfilter_menu);
-
-    GtkWidget *blur_option = gtk_menu_item_new_with_label("Blur");
-    GtkWidget *gaussblur_option = gtk_menu_item_new_with_label("Gauss Smoothing");
-    GtkWidget *sharpen_option = gtk_menu_item_new_with_label("Sharpening");
-    GtkWidget *edges_option = gtk_menu_item_new_with_label("Edge Detection");
-    GtkWidget *emboss_option = gtk_menu_item_new_with_label("Emboss Filter");
-
-    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), blur_option);
-    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), gaussblur_option);
-    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), sharpen_option);
-    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), edges_option);
-    gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), emboss_option);
-
-    g_signal_connect(blur_option, "activate", G_CALLBACK(apply_blur), NULL);
-    g_signal_connect(gaussblur_option, "activate", G_CALLBACK(apply_gaussblur), NULL);
-    g_signal_connect(sharpen_option, "activate", G_CALLBACK(apply_sharpen), NULL);
-    g_signal_connect(edges_option, "activate", G_CALLBACK(apply_edges), NULL);
-    g_signal_connect(emboss_option, "activate", G_CALLBACK(apply_emboss), NULL);
-
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
-}
-    return menu_bar;
-}
-
 void apply_custom_filter(GtkWidget *widget, gpointer data) {
     if (image.empty()) return;
 
@@ -555,10 +469,9 @@ void auto_compute_divisor(GtkWidget *widget, gpointer data) {
 }
 
 GtkWidget *create_kernel_editor() {
-    GtkWidget *main_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10); // 🔹 Horizontal layout
+    GtkWidget *main_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     GtkWidget *kernel_frame, *grid, *control_vbox;
     
-    // 🔹 Kernel Frame (Left Side)
     kernel_frame = gtk_frame_new("Convolution Kernel");
     grid = gtk_grid_new();
     gtk_grid_set_column_spacing(GTK_GRID(grid), 5);
@@ -579,10 +492,8 @@ GtkWidget *create_kernel_editor() {
         }
     }
 
-    // 🔹 Controls Panel (Right Side)
     control_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     
-    // Kernel Size
     GtkWidget* size_label = gtk_label_new("Kernel Size:");
     size_spin = gtk_spin_button_new_with_range(1, 9, 2);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), ckernel_size);
@@ -594,7 +505,6 @@ GtkWidget *create_kernel_editor() {
 
     gtk_box_pack_start(GTK_BOX(control_vbox), size_box, FALSE, FALSE, 0);
 
-    // Divisor Field
     GtkWidget* divisor_label = gtk_label_new("Divisor:");
     divisor_entry = gtk_entry_new();
     gtk_entry_set_text(GTK_ENTRY(divisor_entry), "1");
@@ -606,12 +516,10 @@ GtkWidget *create_kernel_editor() {
 
     gtk_box_pack_start(GTK_BOX(control_vbox), divisor_box, FALSE, FALSE, 0);
 
-    // Auto Divisor Button
     auto_divisor_button = gtk_button_new_with_label("Auto Divisor");
     g_signal_connect(auto_divisor_button, "clicked", G_CALLBACK(auto_compute_divisor), NULL);
     gtk_box_pack_start(GTK_BOX(control_vbox), auto_divisor_button, FALSE, FALSE, 0);
 
-    // Offset Field
     GtkWidget *offset_label = gtk_label_new("Offset:");
     offset_entry = gtk_entry_new();
     gtk_entry_set_text(GTK_ENTRY(offset_entry), "0");
@@ -623,7 +531,6 @@ GtkWidget *create_kernel_editor() {
 
     gtk_box_pack_start(GTK_BOX(control_vbox), offset_box, FALSE, FALSE, 0);
 
-    // Anchor Point Selection
     GtkWidget *anchor_x_label = gtk_label_new("Anchor X:");
     anchor_x_spin = gtk_spin_button_new_with_range(0, ckernel_size - 1, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_x_spin), ckernel_size / 2);
@@ -640,12 +547,10 @@ GtkWidget *create_kernel_editor() {
 
     gtk_box_pack_start(GTK_BOX(control_vbox), anchor_box, FALSE, FALSE, 0);
 
-    // Apply Button
     apply_button = gtk_button_new_with_label("Apply Filter");
     g_signal_connect(apply_button, "clicked", G_CALLBACK(apply_custom_filter), NULL);
     gtk_box_pack_start(GTK_BOX(control_vbox), apply_button, FALSE, FALSE, 0);
 
-    // 🔹 Add Kernel Grid (Left) and Controls (Right) to Horizontal Box
     gtk_box_pack_start(GTK_BOX(main_hbox), kernel_frame, FALSE, FALSE, 5);
     gtk_box_pack_start(GTK_BOX(main_hbox), control_vbox, FALSE, FALSE, 5);
 
@@ -654,37 +559,218 @@ GtkWidget *create_kernel_editor() {
     return main_hbox;
 }
 
+void save_filter(const char* filename) {
+    std::ofstream file(filename);
+    if (!file) {
+        std::cerr << "Error saving filter!" << std::endl;
+        return;
+    }
 
+    file << ckernel_size << std::endl;
 
+    int start = (9 - ckernel_size) / 2; 
 
+    for (int y = 0; y < ckernel_size; y++) {
+        for (int x = 0; x < ckernel_size; x++) {
+            const char *text = gtk_entry_get_text(GTK_ENTRY(kernel_entries[start + y][start + x]));
+            file << (text && strlen(text) > 0 ? text : "0") << " ";
+        }
+        file << std::endl;
+    }
 
+    file << gtk_entry_get_text(GTK_ENTRY(divisor_entry)) << std::endl;
+    file << gtk_entry_get_text(GTK_ENTRY(offset_entry)) << std::endl;
+    file << gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(anchor_x_spin)) << " ";
+    file << gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(anchor_y_spin)) << std::endl;
 
+    file.close();
+}
 
+void load_filter(const char* filename) {
+    std::ifstream file(filename);
+    if (!file) {
+        std::cerr << "Error loading filter!" << std::endl;
+        return;
+    }
 
+    file >> ckernel_size;
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), ckernel_size);
+    update_ckernel_size(size_spin, NULL);
 
+    int start = (9 - ckernel_size) / 2;
+
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            gtk_entry_set_text(GTK_ENTRY(kernel_entries[y][x]), "");
+        }
+    }
+
+    for (int y = 0; y < ckernel_size; y++) {
+        for (int x = 0; x < ckernel_size; x++) {
+            std::string value;
+            file >> value;
+            gtk_entry_set_text(GTK_ENTRY(kernel_entries[start + y][start + x]), value.c_str());
+        }
+    }
+
+    std::string divisor, offset;
+    int anchor_x, anchor_y;
+    file >> divisor >> offset >> anchor_x >> anchor_y;
+
+    gtk_entry_set_text(GTK_ENTRY(divisor_entry), divisor.c_str());
+    gtk_entry_set_text(GTK_ENTRY(offset_entry), offset.c_str());
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_x_spin), anchor_x);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_y_spin), anchor_y);
+
+    file.close();
+}
+
+void on_load_filter(GtkWidget *widget, gpointer data) {
+    GtkWidget *dialog = gtk_file_chooser_dialog_new(
+        "Open Filter", GTK_WINDOW(data), GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Open", GTK_RESPONSE_ACCEPT,
+        NULL
+    );
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        load_filter(filename);
+        g_free(filename);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
+void on_save_filter(GtkWidget *widget, gpointer data) {
+    GtkWidget *dialog = gtk_file_chooser_dialog_new(
+        "Save Filter", GTK_WINDOW(data), GTK_FILE_CHOOSER_ACTION_SAVE,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Save", GTK_RESPONSE_ACCEPT,
+        NULL
+    );
+
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        save_filter(filename);
+        g_free(filename);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
+GtkWidget* create_menu_bar(GtkWidget *window) {
+
+    GtkWidget *menu_bar = gtk_menu_bar_new();
+
+    // File Menu
+
+    GtkWidget *file_menu = gtk_menu_new();
+    GtkWidget *file_menu_item = gtk_menu_item_new_with_label("File");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_menu_item), file_menu);
+
+    GtkWidget *load_item = gtk_menu_item_new_with_label("Load Image");
+    GtkWidget *save_item = gtk_menu_item_new_with_label("Save Image");
+    GtkWidget *load_filter_item = gtk_menu_item_new_with_label("Load Filter"); 
+    GtkWidget *save_filter_item = gtk_menu_item_new_with_label("Save Filter");
+    GtkWidget *exit_item = gtk_menu_item_new_with_label("Exit");
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), load_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), save_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), load_filter_item); 
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), save_filter_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), exit_item);
+
+    g_signal_connect(load_item, "activate", G_CALLBACK(load_image), window);
+    g_signal_connect(save_item, "activate", G_CALLBACK(save_image), window);
+    g_signal_connect(load_filter_item, "activate", G_CALLBACK(on_load_filter), window);
+    g_signal_connect(save_filter_item, "activate", G_CALLBACK(on_save_filter), window);
+    g_signal_connect(exit_item, "activate", G_CALLBACK(gtk_main_quit), NULL);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
+
+    // Pixel Filters Menu
+    {
+        GtkWidget *filter_menu = gtk_menu_new();
+        GtkWidget *filter_menu_item = gtk_menu_item_new_with_label("Filters");
+        gtk_menu_item_set_submenu(GTK_MENU_ITEM(filter_menu_item), filter_menu);
+
+        GtkWidget *invert_item = gtk_menu_item_new_with_label("Invert Colors");
+        GtkWidget *add_brightness = gtk_menu_item_new_with_label("Add Brightness");
+        GtkWidget *remove_brightness = gtk_menu_item_new_with_label("Remove Brightness");
+        GtkWidget *contrast_option = gtk_menu_item_new_with_label("Contrast");
+        GtkWidget *add_gamma = gtk_menu_item_new_with_label("Gamma Bright");
+        GtkWidget *remove_gamma = gtk_menu_item_new_with_label("Gamma Dark");
+        GtkWidget *restore_item = gtk_menu_item_new_with_label("Restore Original");
+
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), invert_item);
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_brightness);
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_brightness);
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), contrast_option);
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_gamma);
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_gamma);
+        gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), restore_item);
+
+        g_signal_connect(invert_item, "activate", G_CALLBACK(apply_inversion), NULL);
+        g_signal_connect(add_brightness, "activate", G_CALLBACK(apply_more_brightness), NULL);
+        g_signal_connect(remove_brightness, "activate", G_CALLBACK(apply_less_brightness), NULL);
+        g_signal_connect(contrast_option, "activate", G_CALLBACK(apply_contrast), NULL);
+        g_signal_connect(add_gamma, "activate", G_CALLBACK(apply_gamma_bright), NULL);
+        g_signal_connect(remove_gamma, "activate", G_CALLBACK(apply_gamma_dark), NULL);
+        g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
+
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), filter_menu_item);
+    }
+
+    // Kernel Filters Menu
+    {
+        GtkWidget *kfilter_menu = gtk_menu_new();
+        GtkWidget *kfilter_menu_item = gtk_menu_item_new_with_label("Kernel Filters");
+        gtk_menu_item_set_submenu(GTK_MENU_ITEM(kfilter_menu_item), kfilter_menu);
+
+        GtkWidget *blur_option = gtk_menu_item_new_with_label("Blur");
+        GtkWidget *gaussblur_option = gtk_menu_item_new_with_label("Gauss Smoothing");
+        GtkWidget *sharpen_option = gtk_menu_item_new_with_label("Sharpening");
+        GtkWidget *edges_option = gtk_menu_item_new_with_label("Edge Detection");
+        GtkWidget *emboss_option = gtk_menu_item_new_with_label("Emboss Filter");
+
+        gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), blur_option);
+        gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), gaussblur_option);
+        gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), sharpen_option);
+        gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), edges_option);
+        gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), emboss_option);
+
+        g_signal_connect(blur_option, "activate", G_CALLBACK(apply_blur), NULL);
+        g_signal_connect(gaussblur_option, "activate", G_CALLBACK(apply_gaussblur), NULL);
+        g_signal_connect(sharpen_option, "activate", G_CALLBACK(apply_sharpen), NULL);
+        g_signal_connect(edges_option, "activate", G_CALLBACK(apply_edges), NULL);
+        g_signal_connect(emboss_option, "activate", G_CALLBACK(apply_emboss), NULL);
+
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
+    }
+
+    return menu_bar;
+}
 
 int main(int argc, char *argv[]) {
     gtk_init(&argc, &argv);
 
-    // Create Main Window
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Image Filtering App");
     gtk_window_set_default_size(GTK_WINDOW(window), 1900, 1000);
     gtk_container_set_border_width(GTK_CONTAINER(window), 10);
 
-    // Create a Vertical Box to Hold Menu Bar and Main Content
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_add(GTK_CONTAINER(window), vbox);
 
-    // Create Menu Bar
     GtkWidget *menu_bar = create_menu_bar(window);
     gtk_box_pack_start(GTK_BOX(vbox), menu_bar, FALSE, FALSE, 0);
 
-    // Create a Paned Container for Image & Kernel Editor
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_box_pack_start(GTK_BOX(vbox), paned, TRUE, TRUE, 0);
 
-    // Left Side: Image Display
     GtkWidget *image_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     scrolled_window = gtk_scrolled_window_new(NULL, NULL);
     gtk_widget_set_vexpand(scrolled_window, TRUE);
@@ -694,20 +780,15 @@ int main(int argc, char *argv[]) {
     image_area = gtk_image_new();
     gtk_container_add(GTK_CONTAINER(scrolled_window), image_area);
 
-    // Add Image Display to the Left Side of GtkPaned
     gtk_paned_add1(GTK_PANED(paned), image_box);
 
-    // Right Side: Kernel Editor (Table)
     GtkWidget *kernel_editor = create_kernel_editor();
     gtk_paned_add2(GTK_PANED(paned), kernel_editor);
 
-    // 🛠 Set Default Width Ratio: Image gets 70%, Kernel gets 30%
-    gtk_paned_set_position(GTK_PANED(paned), 1000); // Adjust width for left side
+    gtk_paned_set_position(GTK_PANED(paned), 1000);
 
-    // Connect Close Event
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
-    // Show Everything
     gtk_widget_show_all(window);
     gtk_main();
 
