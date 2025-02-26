@@ -555,44 +555,34 @@ void auto_compute_divisor(GtkWidget *widget, gpointer data) {
 }
 
 GtkWidget *create_kernel_editor() {
-    GtkWidget *kernel_frame, *grid;
+    GtkWidget *main_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10); // 🔹 Horizontal layout
+    GtkWidget *kernel_frame, *grid, *control_vbox;
     
+    // 🔹 Kernel Frame (Left Side)
     kernel_frame = gtk_frame_new("Convolution Kernel");
     grid = gtk_grid_new();
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 0);
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 0);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 5);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 5);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), FALSE);
     gtk_container_add(GTK_CONTAINER(kernel_frame), grid);
-
+    
     kernel_entries.resize(9, std::vector<GtkWidget*>(9));
-
-    gtk_grid_set_column_homogeneous(GTK_GRID(grid), FALSE); // Allow custom sizes
-
     for (int y = 0; y < 9; y++) {
         for (int x = 0; x < 9; x++) {
             kernel_entries[y][x] = gtk_entry_new();
-
             gtk_entry_set_max_length(GTK_ENTRY(kernel_entries[y][x]), 2);
-            gtk_entry_set_width_chars(GTK_ENTRY(kernel_entries[y][x]), 1); // 🔹 Reduce text width
-
+            gtk_entry_set_width_chars(GTK_ENTRY(kernel_entries[y][x]), 2);
             gtk_widget_set_hexpand(kernel_entries[y][x], FALSE);
             gtk_widget_set_vexpand(kernel_entries[y][x], FALSE);
-
+            gtk_widget_set_size_request(kernel_entries[y][x], 25, 25);
             gtk_grid_attach(GTK_GRID(grid), kernel_entries[y][x], x, y, 1, 1);
-
-            gtk_widget_set_size_request(kernel_entries[y][x], 20, 20); // 🔹 Force smaller size
         }
     }
 
+    // 🔹 Controls Panel (Right Side)
+    control_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     
-
-    // 🔹 Step 1: Force Columns to be Equal
-    for (int i = 0; i < 9; i++) {
-        GtkWidget *empty_label = gtk_label_new(" ");
-        gtk_widget_set_size_request(empty_label, 40, -1);
-        gtk_grid_attach(GTK_GRID(grid), empty_label, i, 9, 1, 1);
-    }
-
-    // 🔹 Kernel Size Selector
+    // Kernel Size
     GtkWidget* size_label = gtk_label_new("Kernel Size:");
     size_spin = gtk_spin_button_new_with_range(1, 9, 2);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), ckernel_size);
@@ -601,30 +591,39 @@ GtkWidget *create_kernel_editor() {
     GtkWidget *size_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
     gtk_box_pack_start(GTK_BOX(size_box), size_label, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(size_box), size_spin, FALSE, FALSE, 0);
-    gtk_grid_attach(GTK_GRID(grid), size_box, 0, 10, 4, 1);
 
-    // 🔹 Divisor Field
+    gtk_box_pack_start(GTK_BOX(control_vbox), size_box, FALSE, FALSE, 0);
+
+    // Divisor Field
     GtkWidget* divisor_label = gtk_label_new("Divisor:");
     divisor_entry = gtk_entry_new();
     gtk_entry_set_text(GTK_ENTRY(divisor_entry), "1");
     gtk_entry_set_width_chars(GTK_ENTRY(divisor_entry), 3);
-    gtk_grid_attach(GTK_GRID(grid), divisor_label, 0, 11, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), divisor_entry, 1, 11, 1, 1);
+    
+    GtkWidget *divisor_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    gtk_box_pack_start(GTK_BOX(divisor_box), divisor_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(divisor_box), divisor_entry, FALSE, FALSE, 0);
 
-    // 🔹 Auto Divisor Button
+    gtk_box_pack_start(GTK_BOX(control_vbox), divisor_box, FALSE, FALSE, 0);
+
+    // Auto Divisor Button
     auto_divisor_button = gtk_button_new_with_label("Auto Divisor");
     g_signal_connect(auto_divisor_button, "clicked", G_CALLBACK(auto_compute_divisor), NULL);
-    gtk_grid_attach(GTK_GRID(grid), auto_divisor_button, 2, 11, 2, 1);
+    gtk_box_pack_start(GTK_BOX(control_vbox), auto_divisor_button, FALSE, FALSE, 0);
 
-    // 🔹 Offset Field
+    // Offset Field
     GtkWidget *offset_label = gtk_label_new("Offset:");
     offset_entry = gtk_entry_new();
     gtk_entry_set_text(GTK_ENTRY(offset_entry), "0");
     gtk_entry_set_width_chars(GTK_ENTRY(offset_entry), 3);
-    gtk_grid_attach(GTK_GRID(grid), offset_label, 0, 12, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), offset_entry, 1, 12, 1, 1);
 
-    // 🔹 Anchor Point Selection
+    GtkWidget *offset_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    gtk_box_pack_start(GTK_BOX(offset_box), offset_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(offset_box), offset_entry, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(control_vbox), offset_box, FALSE, FALSE, 0);
+
+    // Anchor Point Selection
     GtkWidget *anchor_x_label = gtk_label_new("Anchor X:");
     anchor_x_spin = gtk_spin_button_new_with_range(0, ckernel_size - 1, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_x_spin), ckernel_size / 2);
@@ -633,19 +632,26 @@ GtkWidget *create_kernel_editor() {
     anchor_y_spin = gtk_spin_button_new_with_range(0, ckernel_size - 1, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_y_spin), ckernel_size / 2);
 
-    gtk_grid_attach(GTK_GRID(grid), anchor_x_label, 0, 13, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), anchor_x_spin, 1, 13, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), anchor_y_label, 2, 13, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), anchor_y_spin, 3, 13, 1, 1);
+    GtkWidget *anchor_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    gtk_box_pack_start(GTK_BOX(anchor_box), anchor_x_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(anchor_box), anchor_x_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(anchor_box), anchor_y_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(anchor_box), anchor_y_spin, FALSE, FALSE, 0);
 
-    // 🔹 Apply Button
+    gtk_box_pack_start(GTK_BOX(control_vbox), anchor_box, FALSE, FALSE, 0);
+
+    // Apply Button
     apply_button = gtk_button_new_with_label("Apply Filter");
     g_signal_connect(apply_button, "clicked", G_CALLBACK(apply_custom_filter), NULL);
-    gtk_grid_attach(GTK_GRID(grid), apply_button, 0, 14, 4, 1);
+    gtk_box_pack_start(GTK_BOX(control_vbox), apply_button, FALSE, FALSE, 0);
 
-   // update_ckernel_size(size_spin, NULL);
+    // 🔹 Add Kernel Grid (Left) and Controls (Right) to Horizontal Box
+    gtk_box_pack_start(GTK_BOX(main_hbox), kernel_frame, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(main_hbox), control_vbox, FALSE, FALSE, 5);
 
-    return kernel_frame;
+    update_ckernel_size(size_spin, NULL);
+
+    return main_hbox;
 }
 
 
@@ -663,7 +669,7 @@ int main(int argc, char *argv[]) {
     // Create Main Window
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Image Filtering App");
-    gtk_window_set_default_size(GTK_WINDOW(window), 1500, 1000);
+    gtk_window_set_default_size(GTK_WINDOW(window), 1900, 1000);
     gtk_container_set_border_width(GTK_CONTAINER(window), 10);
 
     // Create a Vertical Box to Hold Menu Bar and Main Content
