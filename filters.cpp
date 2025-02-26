@@ -27,6 +27,8 @@ GtkWidget *size_spin;
 GtkWidget *divisor_entry;
 GtkWidget *apply_button;
 GtkWidget *auto_divisor_button;
+GtkWidget *offset_entry;
+GtkWidget *anchor_x_spin, *anchor_y_spin;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
     if (image.empty()) return;
@@ -466,6 +468,15 @@ void apply_custom_filter(GtkWidget *widget, gpointer data) {
         }
     }
 
+    const char *offset_text = gtk_entry_get_text(GTK_ENTRY(offset_entry));
+    if (offset_text && strlen(offset_text) > 0) {
+        try {
+            offset = std::stoi(offset_text);
+        } catch (...) {
+            offset = 0;
+        }
+    }
+
     int divisor = 1;
     const char *divisor_text = gtk_entry_get_text(GTK_ENTRY(divisor_entry));
     if (divisor_text && strlen(divisor_text) > 0) {
@@ -477,23 +488,25 @@ void apply_custom_filter(GtkWidget *widget, gpointer data) {
         }
     }
 
-    apply_filter([divisor](const cv::Mat &img, int x, int y) -> cv::Vec3b {
-        cv::Vec3d sum(0, 0, 0);
-        int offset = ckernel_size / 2; 
+    int anchor_x = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(anchor_x_spin));
+    int anchor_y = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(anchor_y_spin));
 
-        for (int j = -offset; j <= offset; j++) {
-            for (int i = -offset; i <= offset; i++) {
-                int new_y = std::clamp(y + j, 0, img.rows - 1);
-                int new_x = std::clamp(x + i, 0, img.cols - 1);
-                int kernel_y = j + offset;
-                int kernel_x = i + offset;
-                int weight = kernel_values[kernel_y][kernel_x];
+    apply_filter([divisor, offset, anchor_x, anchor_y](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3d sum(0, 0, 0); 
 
+        for (int j = 0; j < ckernel_size; j++) {
+            for (int i = 0; i < ckernel_size; i++) {
+                int new_y = std::clamp(y + j - anchor_y, 0, img.rows - 1);
+                int new_x = std::clamp(x + i - anchor_x, 0, img.cols - 1);
+
+                int weight = kernel_values[j][i];
                 sum += weight * static_cast<cv::Vec3d>(img.at<cv::Vec3b>(new_y, new_x));
             }
         }
 
+
         sum /= divisor;
+        sum += cv::Vec3d(offset, offset, offset);
 
         return cv::Vec3b(
             cv::saturate_cast<uchar>(sum[0]),
@@ -546,26 +559,40 @@ GtkWidget *create_kernel_editor() {
     
     kernel_frame = gtk_frame_new("Convolution Kernel");
     grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 0);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 0);
     gtk_container_add(GTK_CONTAINER(kernel_frame), grid);
-
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 2);
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 2);
-    gtk_grid_set_column_homogeneous(GTK_GRID(grid), FALSE);
 
     kernel_entries.resize(9, std::vector<GtkWidget*>(9));
 
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), FALSE); // Allow custom sizes
+
     for (int y = 0; y < 9; y++) {
         for (int x = 0; x < 9; x++) {
-            GtkWidget *entry_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
             kernel_entries[y][x] = gtk_entry_new();
 
             gtk_entry_set_max_length(GTK_ENTRY(kernel_entries[y][x]), 2);
-            gtk_entry_set_width_chars(GTK_ENTRY(kernel_entries[y][x]), 2);
+            gtk_entry_set_width_chars(GTK_ENTRY(kernel_entries[y][x]), 1); // 🔹 Reduce text width
 
-            gtk_box_pack_start(GTK_BOX(entry_box), kernel_entries[y][x], TRUE, TRUE, 0);
-            gtk_grid_attach(GTK_GRID(grid), entry_box, x, y, 1, 1);
+            gtk_widget_set_hexpand(kernel_entries[y][x], FALSE);
+            gtk_widget_set_vexpand(kernel_entries[y][x], FALSE);
+
+            gtk_grid_attach(GTK_GRID(grid), kernel_entries[y][x], x, y, 1, 1);
+
+            gtk_widget_set_size_request(kernel_entries[y][x], 20, 20); // 🔹 Force smaller size
         }
     }
+
+    
+
+    // 🔹 Step 1: Force Columns to be Equal
+    for (int i = 0; i < 9; i++) {
+        GtkWidget *empty_label = gtk_label_new(" ");
+        gtk_widget_set_size_request(empty_label, 40, -1);
+        gtk_grid_attach(GTK_GRID(grid), empty_label, i, 9, 1, 1);
+    }
+
+    // 🔹 Kernel Size Selector
     GtkWidget* size_label = gtk_label_new("Kernel Size:");
     size_spin = gtk_spin_button_new_with_range(1, 9, 2);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), ckernel_size);
@@ -576,26 +603,52 @@ GtkWidget *create_kernel_editor() {
     gtk_box_pack_start(GTK_BOX(size_box), size_spin, FALSE, FALSE, 0);
     gtk_grid_attach(GTK_GRID(grid), size_box, 0, 10, 4, 1);
 
+    // 🔹 Divisor Field
     GtkWidget* divisor_label = gtk_label_new("Divisor:");
     divisor_entry = gtk_entry_new();
     gtk_entry_set_text(GTK_ENTRY(divisor_entry), "1");
     gtk_entry_set_width_chars(GTK_ENTRY(divisor_entry), 3);
-
     gtk_grid_attach(GTK_GRID(grid), divisor_label, 0, 11, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), divisor_entry, 1, 11, 1, 1);
 
+    // 🔹 Auto Divisor Button
     auto_divisor_button = gtk_button_new_with_label("Auto Divisor");
     g_signal_connect(auto_divisor_button, "clicked", G_CALLBACK(auto_compute_divisor), NULL);
     gtk_grid_attach(GTK_GRID(grid), auto_divisor_button, 2, 11, 2, 1);
 
+    // 🔹 Offset Field
+    GtkWidget *offset_label = gtk_label_new("Offset:");
+    offset_entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(offset_entry), "0");
+    gtk_entry_set_width_chars(GTK_ENTRY(offset_entry), 3);
+    gtk_grid_attach(GTK_GRID(grid), offset_label, 0, 12, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), offset_entry, 1, 12, 1, 1);
+
+    // 🔹 Anchor Point Selection
+    GtkWidget *anchor_x_label = gtk_label_new("Anchor X:");
+    anchor_x_spin = gtk_spin_button_new_with_range(0, ckernel_size - 1, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_x_spin), ckernel_size / 2);
+
+    GtkWidget *anchor_y_label = gtk_label_new("Anchor Y:");
+    anchor_y_spin = gtk_spin_button_new_with_range(0, ckernel_size - 1, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_y_spin), ckernel_size / 2);
+
+    gtk_grid_attach(GTK_GRID(grid), anchor_x_label, 0, 13, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), anchor_x_spin, 1, 13, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), anchor_y_label, 2, 13, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), anchor_y_spin, 3, 13, 1, 1);
+
+    // 🔹 Apply Button
     apply_button = gtk_button_new_with_label("Apply Filter");
     g_signal_connect(apply_button, "clicked", G_CALLBACK(apply_custom_filter), NULL);
-    gtk_grid_attach(GTK_GRID(grid), apply_button, 0, 12, 4, 1);
+    gtk_grid_attach(GTK_GRID(grid), apply_button, 0, 14, 4, 1);
 
-    update_ckernel_size(size_spin, NULL);
+   // update_ckernel_size(size_spin, NULL);
 
     return kernel_frame;
 }
+
+
 
 
 
