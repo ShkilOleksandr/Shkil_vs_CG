@@ -3,6 +3,7 @@
 #include <iostream>
 #include <functional>
 #include <math.h>
+#include <vector>
 
 cv::Mat image, original_image;
 GtkWidget *image_area;
@@ -17,6 +18,15 @@ int kernel_size = 3;
 double sigma = 1.0;
 double a = -1;
 double b = kernel_size * kernel_size;
+
+// Custom Grid manipulation variables
+int ckernel_size = 3;
+std::vector<std::vector<GtkWidget*>> kernel_entries;
+std::vector<std::vector<int>> kernel_values;
+GtkWidget *size_spin;  // 🔹 Global variable for kernel size selection
+GtkWidget *divisor_entry; // 🔹 Global variable for divisor field
+GtkWidget *apply_button; // 🔹 Global Apply button
+GtkWidget *auto_divisor_button;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
     if (image.empty()) return;
@@ -430,31 +440,219 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     return menu_bar;
 }
 
+void apply_custom_filter(GtkWidget *widget, gpointer data) {
+    if (image.empty()) return;
+
+    // Resize kernel_values to ckernel_size × ckernel_size
+    kernel_values.resize(ckernel_size, std::vector<int>(ckernel_size, 0));
+
+    // Read values from GtkEntry widgets into kernel_values
+    for (int y = 0; y < ckernel_size; y++) {
+        for (int x = 0; x < ckernel_size; x++) {
+            const char *text = gtk_entry_get_text(GTK_ENTRY(kernel_entries[y][x]));
+
+            if (text && strlen(text) > 0) {
+                try {
+                    kernel_values[y][x] = std::stoi(text);
+                } catch (...) {
+                    kernel_values[y][x] = 0;  // Default on invalid input
+                }
+            } else {
+                kernel_values[y][x] = 0; // Empty cells treated as zero
+            }
+        }
+    }
+
+    // Read Divisor
+    int divisor = 1;
+    const char *divisor_text = gtk_entry_get_text(GTK_ENTRY(divisor_entry));
+    if (divisor_text && strlen(divisor_text) > 0) {
+        try {
+            divisor = std::stoi(divisor_text);
+            if (divisor == 0) divisor = 1;
+        } catch (...) {
+            divisor = 1;
+        }
+    }
+
+    // Apply custom convolution filter
+    apply_filter([divisor](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3d sum(0, 0, 0);
+
+        for (int j = -ckernel_size / 2; j <= ckernel_size / 2; j++) {
+            for (int i = -ckernel_size / 2; i <= ckernel_size / 2; i++) {
+                int new_y = std::clamp(y + j, 0, img.rows - 1);
+                int new_x = std::clamp(x + i, 0, img.cols - 1);
+
+                int weight = kernel_values[j + ckernel_size / 2][i + ckernel_size / 2];
+                sum += weight * static_cast<cv::Vec3d>(img.at<cv::Vec3b>(new_y, new_x));
+            }
+        }
+
+        sum /= divisor;
+
+        return cv::Vec3b(
+            cv::saturate_cast<uchar>(sum[0]),
+            cv::saturate_cast<uchar>(sum[1]),
+            cv::saturate_cast<uchar>(sum[2])
+        );
+    });
+}
+
+
+
+void update_ckernel_size(GtkWidget *widget, gpointer data) {
+    ckernel_size = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget));
+
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            bool is_active = (abs(y - 4) < ckernel_size / 2 + 1) && (abs(x - 4) < ckernel_size / 2 + 1);
+            gtk_widget_set_sensitive(kernel_entries[y][x], is_active);
+        }
+    }
+}
+
+void auto_compute_divisor(GtkWidget *widget, gpointer data) {
+    int sum = 0;
+
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            
+            bool is_active = (abs(y - 4) < ckernel_size / 2 + 1) && (abs(x - 4) < ckernel_size / 2 + 1);
+
+            if(is_active){
+                const char *text = gtk_entry_get_text(GTK_ENTRY(kernel_entries[y][x]));
+                if (text && strlen(text) > 0) {
+                    try {
+                        sum += std::stoi(text);
+                    } catch (...) {
+                        sum += 0;
+                    }
+                }
+            }
+        }
+    }
+    if (sum == 0) sum = 1;
+
+    std::string divisor_text = std::to_string(sum);
+
+    gtk_entry_set_text(GTK_ENTRY(divisor_entry), divisor_text.c_str());
+}
+
+
+GtkWidget *create_kernel_editor() {
+    GtkWidget *kernel_frame, *grid;
+    
+    kernel_frame = gtk_frame_new("Convolution Kernel");
+    grid = gtk_grid_new();
+    gtk_container_add(GTK_CONTAINER(kernel_frame), grid);
+
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 2);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 2);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), FALSE);
+
+    kernel_entries.resize(9, std::vector<GtkWidget*>(9));
+
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            GtkWidget *entry_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            kernel_entries[y][x] = gtk_entry_new();
+
+            gtk_entry_set_max_length(GTK_ENTRY(kernel_entries[y][x]), 2);
+            gtk_entry_set_width_chars(GTK_ENTRY(kernel_entries[y][x]), 2);
+
+            gtk_box_pack_start(GTK_BOX(entry_box), kernel_entries[y][x], TRUE, TRUE, 0);
+            gtk_grid_attach(GTK_GRID(grid), entry_box, x, y, 1, 1);
+        }
+    }
+    GtkWidget* size_label = gtk_label_new("Kernel Size:");
+    size_spin = gtk_spin_button_new_with_range(1, 9, 2);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), ckernel_size);
+    g_signal_connect(size_spin, "value-changed", G_CALLBACK(update_ckernel_size), NULL);
+
+    GtkWidget *size_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    gtk_box_pack_start(GTK_BOX(size_box), size_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(size_box), size_spin, FALSE, FALSE, 0);
+    gtk_grid_attach(GTK_GRID(grid), size_box, 0, 10, 4, 1);
+
+    GtkWidget* divisor_label = gtk_label_new("Divisor:");
+    divisor_entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(divisor_entry), "1");
+    gtk_entry_set_width_chars(GTK_ENTRY(divisor_entry), 3);
+
+    gtk_grid_attach(GTK_GRID(grid), divisor_label, 0, 11, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), divisor_entry, 1, 11, 1, 1);
+
+    auto_divisor_button = gtk_button_new_with_label("Auto Divisor");
+    g_signal_connect(auto_divisor_button, "clicked", G_CALLBACK(auto_compute_divisor), NULL);
+    gtk_grid_attach(GTK_GRID(grid), auto_divisor_button, 2, 11, 2, 1);
+
+    apply_button = gtk_button_new_with_label("Apply Filter");
+    g_signal_connect(apply_button, "clicked", G_CALLBACK(apply_custom_filter), NULL);
+    gtk_grid_attach(GTK_GRID(grid), apply_button, 0, 12, 4, 1);
+
+    update_ckernel_size(size_spin, NULL);
+
+    return kernel_frame;
+}
+
+
+
+
+
+
+
+
 int main(int argc, char *argv[]) {
     gtk_init(&argc, &argv);
 
+    // Create Main Window
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Image Filtering App");
     gtk_window_set_default_size(GTK_WINDOW(window), 1500, 1000);
     gtk_container_set_border_width(GTK_CONTAINER(window), 10);
 
+    // Create a Vertical Box to Hold Menu Bar and Main Content
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_add(GTK_CONTAINER(window), vbox);
 
+    // Create Menu Bar
     GtkWidget *menu_bar = create_menu_bar(window);
     gtk_box_pack_start(GTK_BOX(vbox), menu_bar, FALSE, FALSE, 0);
 
+    // Create a Paned Container for Image & Kernel Editor
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_pack_start(GTK_BOX(vbox), paned, TRUE, TRUE, 0);
+
+    // Left Side: Image Display
+    GtkWidget *image_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     scrolled_window = gtk_scrolled_window_new(NULL, NULL);
     gtk_widget_set_vexpand(scrolled_window, TRUE);
     gtk_widget_set_hexpand(scrolled_window, TRUE);
-    gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 5);
+    gtk_box_pack_start(GTK_BOX(image_box), scrolled_window, TRUE, TRUE, 5);
 
     image_area = gtk_image_new();
     gtk_container_add(GTK_CONTAINER(scrolled_window), image_area);
 
+    // Add Image Display to the Left Side of GtkPaned
+    gtk_paned_add1(GTK_PANED(paned), image_box);
+
+    // Right Side: Kernel Editor (Table)
+    GtkWidget *kernel_editor = create_kernel_editor();
+    gtk_paned_add2(GTK_PANED(paned), kernel_editor);
+
+    // 🛠 Set Default Width Ratio: Image gets 70%, Kernel gets 30%
+    gtk_paned_set_position(GTK_PANED(paned), 1000); // Adjust width for left side
+
+    // Connect Close Event
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+
+    // Show Everything
     gtk_widget_show_all(window);
     gtk_main();
 
     return 0;
 }
+
+
+
