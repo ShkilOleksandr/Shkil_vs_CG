@@ -23,9 +23,9 @@ double b = kernel_size * kernel_size;
 int ckernel_size = 3;
 std::vector<std::vector<GtkWidget*>> kernel_entries;
 std::vector<std::vector<int>> kernel_values;
-GtkWidget *size_spin;  // 🔹 Global variable for kernel size selection
-GtkWidget *divisor_entry; // 🔹 Global variable for divisor field
-GtkWidget *apply_button; // 🔹 Global Apply button
+GtkWidget *size_spin; 
+GtkWidget *divisor_entry;
+GtkWidget *apply_button;
 GtkWidget *auto_divisor_button;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
@@ -443,27 +443,29 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 void apply_custom_filter(GtkWidget *widget, gpointer data) {
     if (image.empty()) return;
 
-    // Resize kernel_values to ckernel_size × ckernel_size
-    kernel_values.resize(ckernel_size, std::vector<int>(ckernel_size, 0));
+    kernel_values = std::vector<std::vector<int>>(ckernel_size, std::vector<int>(ckernel_size, 0));
 
-    // Read values from GtkEntry widgets into kernel_values
+    int offset = (9 - ckernel_size) / 2;
+
     for (int y = 0; y < ckernel_size; y++) {
         for (int x = 0; x < ckernel_size; x++) {
-            const char *text = gtk_entry_get_text(GTK_ENTRY(kernel_entries[y][x]));
+            int entry_y = y + offset;
+            int entry_x = x + offset;
+
+            const char *text = gtk_entry_get_text(GTK_ENTRY(kernel_entries[entry_y][entry_x]));
 
             if (text && strlen(text) > 0) {
                 try {
                     kernel_values[y][x] = std::stoi(text);
                 } catch (...) {
-                    kernel_values[y][x] = 0;  // Default on invalid input
+                    kernel_values[y][x] = 0;
                 }
             } else {
-                kernel_values[y][x] = 0; // Empty cells treated as zero
+                kernel_values[y][x] = 0;
             }
         }
     }
 
-    // Read Divisor
     int divisor = 1;
     const char *divisor_text = gtk_entry_get_text(GTK_ENTRY(divisor_entry));
     if (divisor_text && strlen(divisor_text) > 0) {
@@ -475,16 +477,18 @@ void apply_custom_filter(GtkWidget *widget, gpointer data) {
         }
     }
 
-    // Apply custom convolution filter
     apply_filter([divisor](const cv::Mat &img, int x, int y) -> cv::Vec3b {
         cv::Vec3d sum(0, 0, 0);
+        int offset = ckernel_size / 2; 
 
-        for (int j = -ckernel_size / 2; j <= ckernel_size / 2; j++) {
-            for (int i = -ckernel_size / 2; i <= ckernel_size / 2; i++) {
+        for (int j = -offset; j <= offset; j++) {
+            for (int i = -offset; i <= offset; i++) {
                 int new_y = std::clamp(y + j, 0, img.rows - 1);
                 int new_x = std::clamp(x + i, 0, img.cols - 1);
+                int kernel_y = j + offset;
+                int kernel_x = i + offset;
+                int weight = kernel_values[kernel_y][kernel_x];
 
-                int weight = kernel_values[j + ckernel_size / 2][i + ckernel_size / 2];
                 sum += weight * static_cast<cv::Vec3d>(img.at<cv::Vec3b>(new_y, new_x));
             }
         }
@@ -498,8 +502,6 @@ void apply_custom_filter(GtkWidget *widget, gpointer data) {
         );
     });
 }
-
-
 
 void update_ckernel_size(GtkWidget *widget, gpointer data) {
     ckernel_size = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget));
@@ -538,7 +540,6 @@ void auto_compute_divisor(GtkWidget *widget, gpointer data) {
 
     gtk_entry_set_text(GTK_ENTRY(divisor_entry), divisor_text.c_str());
 }
-
 
 GtkWidget *create_kernel_editor() {
     GtkWidget *kernel_frame, *grid;
