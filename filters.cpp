@@ -621,6 +621,9 @@ void load_filter(const char* filename) {
     gtk_entry_set_text(GTK_ENTRY(offset_entry), offset.c_str());
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_x_spin), anchor_x);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(anchor_y_spin), anchor_y);
+    gtk_spin_button_set_range(GTK_SPIN_BUTTON(anchor_x_spin), 0, ckernel_size - 1);
+    gtk_spin_button_set_range(GTK_SPIN_BUTTON(anchor_y_spin), 0, ckernel_size - 1);
+
 
     file.close();
 }
