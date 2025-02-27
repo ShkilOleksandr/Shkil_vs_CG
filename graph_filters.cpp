@@ -25,6 +25,7 @@ double b = kernel_size * kernel_size;
 std::vector<GdkPoint> points = {{0, 255}, {255, 0}};
 static int dragging_index = -1;
 static int selected_index = -1;
+GtkWidget *drawing_area;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
@@ -665,6 +666,18 @@ void apply_graph_filter() {
     update_image_display(NULL);
 }
 
+void reset_filter() {
+    // 🔹 Reset graph to default identity mapping: (0,0) and (255,255)
+    points.clear();
+    points.push_back({0, 255});
+    points.push_back({255, 0});
+
+    if (drawing_area) {
+        gtk_widget_queue_draw(drawing_area);
+    } else {
+        std::cerr << "Error: drawing_area is NULL!\n";  // Debugging output
+    }
+}
 
 GtkWidget* create_menu_bar(GtkWidget *window) {
 
@@ -679,108 +692,62 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
 
     GtkWidget *file_menu = gtk_menu_new();
-
     GtkWidget *file_menu_item = gtk_menu_item_new_with_label("File");
-
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_menu_item), file_menu);
 
-
-
     GtkWidget *load_item = gtk_menu_item_new_with_label("Load Image");
-
     GtkWidget *save_item = gtk_menu_item_new_with_label("Save Image");
-
     GtkWidget *exit_item = gtk_menu_item_new_with_label("Exit");
 
-
-
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), load_item);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), save_item);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), exit_item);
 
-
-
     g_signal_connect(load_item, "activate", G_CALLBACK(load_image), window);
-
     g_signal_connect(save_item, "activate", G_CALLBACK(save_image), window);
-
     g_signal_connect(exit_item, "activate", G_CALLBACK(gtk_main_quit), NULL);
 
-
-
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
-
-
-
-
 
     //Pixel filters
 
 {
 
     GtkWidget *filter_menu = gtk_menu_new();
-
     GtkWidget *filter_menu_item = gtk_menu_item_new_with_label("Filters");
-
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(filter_menu_item), filter_menu);
 
-
-
     GtkWidget *invert_item = gtk_menu_item_new_with_label("Invert Colors");
-
     GtkWidget *add_brightness = gtk_menu_item_new_with_label("Add brightness");
-
     GtkWidget *remove_brightness = gtk_menu_item_new_with_label("Remove brightness");
-
     GtkWidget *contrast_option = gtk_menu_item_new_with_label("Contrast");
-
     GtkWidget *add_gamma = gtk_menu_item_new_with_label("Gamma bright");
-
     GtkWidget *remove_gamma = gtk_menu_item_new_with_label("Gamma dark");
-
     GtkWidget *restore_item = gtk_menu_item_new_with_label("Restore Original");
-
     GtkWidget *custom_filter = gtk_menu_item_new_with_label("Functional Filter");
+    GtkWidget *reset_filter_ = gtk_menu_item_new_with_label("Reset Filter");
 
 
 
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), invert_item);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_brightness);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_brightness);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), contrast_option);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), add_gamma);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), remove_gamma);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), restore_item);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), custom_filter);
-
-
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), reset_filter_);
 
     g_signal_connect(invert_item, "activate", G_CALLBACK(apply_inversion), NULL);
-
     g_signal_connect(add_brightness, "activate", G_CALLBACK(apply_more_brightness),NULL);
-
     g_signal_connect(remove_brightness, "activate", G_CALLBACK(apply_less_brightness),NULL);
-
     g_signal_connect(contrast_option, "activate", G_CALLBACK(apply_contrast),NULL);
-
     g_signal_connect(add_gamma, "activate", G_CALLBACK(apply_gamma_bright),NULL);
-
     g_signal_connect(remove_gamma, "activate", G_CALLBACK(apply_gamma_dark),NULL);
-
     g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
-
     g_signal_connect(custom_filter, "activate", G_CALLBACK(apply_graph_filter), NULL);
-
-
+    g_signal_connect(reset_filter_, "activate", G_CALLBACK(reset_filter), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), filter_menu_item);
 
@@ -793,48 +760,26 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 {
 
     GtkWidget *kfilter_menu = gtk_menu_new();
-
     GtkWidget *kfilter_menu_item = gtk_menu_item_new_with_label("Kernel Filters");
-
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(kfilter_menu_item), kfilter_menu);
 
-
-
     GtkWidget *blur_option = gtk_menu_item_new_with_label("Blur");
-
     GtkWidget *gaussblur_option = gtk_menu_item_new_with_label("Gauss Smoothing");
-
     GtkWidget *sharpen_option = gtk_menu_item_new_with_label("Sharpening");
-
     GtkWidget *edges_option = gtk_menu_item_new_with_label("Edge Detection");
-
     GtkWidget *emboss_option = gtk_menu_item_new_with_label("Emboss Filter");
 
-
-
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), blur_option);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), gaussblur_option);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), sharpen_option);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), edges_option);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(kfilter_menu), emboss_option);
 
-
-
     g_signal_connect(blur_option, "activate", G_CALLBACK(apply_blur), NULL);
-
     g_signal_connect(gaussblur_option, "activate", G_CALLBACK(apply_gaussblur), NULL);
-
     g_signal_connect(sharpen_option, "activate", G_CALLBACK(apply_sharpen), NULL);
-
     g_signal_connect(edges_option, "activate", G_CALLBACK(apply_edges), NULL);
-
     g_signal_connect(emboss_option, "activate", G_CALLBACK(apply_emboss), NULL);
-
-
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
 
@@ -959,7 +904,7 @@ int main(int argc, char *argv[]) {
 
     // 🔹 Right Side: Graph Editor
     GtkWidget *graph_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    GtkWidget *drawing_area = gtk_drawing_area_new();
+    drawing_area = gtk_drawing_area_new();
     gtk_widget_set_size_request(drawing_area, 256, 256);
 
     // 🔹 Add Padding to Graph
