@@ -20,6 +20,12 @@ double a = -1;
 double b = kernel_size * kernel_size;
 
 
+// Line drawing
+
+std::vector<GdkPoint> points = {{0, 255}, {255, 0}};
+static int dragging_index = -1;
+static int selected_index = -1;
+
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
     if (image.empty()) return;
@@ -804,60 +810,217 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
 }
 
+void update_image_display(GdkPixbuf *pixbuf) {
+    if (!image_area) return;  // Prevent crashes
+
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
+    gtk_widget_queue_draw(image_area);  // Force redraw
+}
+
+// 🔹 Ensure Image Updates When a Point is Added
+static gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    if (event->button == 1 && selected_index == -1) { // Only add if no point was selected
+        GdkPoint new_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
+
+        auto it = std::lower_bound(points.begin(), points.end(), new_point,
+            [](const GdkPoint &a, const GdkPoint &b) { return a.x < b.x; });
+        points.insert(it, new_point);
+
+        gtk_widget_queue_draw(widget);
+        
+        // 🔹 Update Image
+        update_image_display(NULL);
+    }
+    return TRUE;
+}
+
+// 🔹 Ensure Image Updates When Dragging a Point
+static gboolean on_mouse_drag(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
+    if (dragging_index >= 0) {  // Move only if a point was selected before dragging
+        points[dragging_index].y = std::clamp(static_cast<int>(event->y), 0, 255);
+        gtk_widget_queue_draw(widget);
+
+        // 🔹 Update Image
+        update_image_display(NULL);
+    }
+    return TRUE;
+}
+
+// 🔹 Ensure Image Updates When Selecting or Deleting a Point
+static gboolean on_mouse_press(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    if (event->button == 1) { // Left Click: Select point without moving immediately
+        for (size_t i = 0; i < points.size(); i++) {
+            if (std::abs(points[i].x - event->x) < 5 && std::abs(points[i].y - event->y) < 5) {
+                selected_index = i;  // Select point, but don't move yet
+                dragging_index = i;  // Mark for dragging
+                return TRUE;
+            }
+        }
+        selected_index = -1; // No point selected
+        dragging_index = -1;
+    }
+
+    if (event->button == 3) { // Right Click: Delete point
+        for (size_t i = 0; i < points.size(); i++) {
+            if (std::abs(points[i].x - event->x) < 5 && std::abs(points[i].y - event->y) < 5) {
+                if (i == 0 || i == points.size() - 1) return FALSE; // Don't delete first & last points
+                points.erase(points.begin() + i);
+                gtk_widget_queue_draw(widget);
+
+                // 🔹 Update Image
+                update_image_display(NULL);
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+// 🔹 Ensure Image Updates When Releasing Drag
+static gboolean on_mouse_release(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    if (event->button == 1) {  // Left-click release
+        dragging_index = -1;  // Stop dragging
+
+        // 🔹 Update Image
+        update_image_display(NULL);
+    }
+    return TRUE;
+}
+
+// 🔹 Function to Apply Graph Filter using `apply_filter()`
+void apply_function_graph_filter() {
+    if (image.empty() || points.size() < 2) return;
+
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+
+        // Apply function graph mapping
+        auto interpolate = [](double x) -> double {
+            if (points.size() < 2) return x;
+            
+            for (size_t i = 0; i < points.size() - 1; i++) {
+                if (x >= points[i].x && x <= points[i + 1].x) {
+                    double x1 = points[i].x / 255.0;
+                    double y1 = points[i].y / 255.0;
+                    double x2 = points[i + 1].x / 255.0;
+                    double y2 = points[i + 1].y / 255.0;
+
+                    double t = (x - x1) / (x2 - x1);
+                    return y1 + t * (y2 - y1);
+                }
+            }
+            return x;  // Default to identity
+        };
+
+        return cv::Vec3b(
+            std::clamp(static_cast<int>(interpolate(pixel[0]) * 255), 0, 255),
+            std::clamp(static_cast<int>(interpolate(pixel[1]) * 255), 0, 255),
+            std::clamp(static_cast<int>(interpolate(pixel[2]) * 255), 0, 255)
+        );
+    });
+
+    update_image_display(NULL);
+}
+
+// 🔹 Ensure Function Graph Draws Correctly
+static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
+    cairo_set_source_rgb(cr, 1, 1, 1); // White background
+    cairo_paint(cr);
+
+    // Draw Grid
+    cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+    for (int i = 0; i <= 255; i += 64) {
+        cairo_move_to(cr, i, 0);
+        cairo_line_to(cr, i, 255);
+        cairo_move_to(cr, 0, i);
+        cairo_line_to(cr, 255, i);
+    }
+    cairo_stroke(cr);
+
+    // Draw the polyline
+    cairo_set_source_rgb(cr, 0, 1, 0); // Green Line
+    cairo_set_line_width(cr, 2);
+    for (size_t i = 0; i < points.size() - 1; i++) {
+        cairo_move_to(cr, points[i].x, points[i].y);
+        cairo_line_to(cr, points[i + 1].x, points[i + 1].y);
+    }
+    cairo_stroke(cr);
+
+    // Draw Points
+    cairo_set_source_rgb(cr, 1, 0, 0); // Red Points
+    for (const auto &p : points) {
+        cairo_arc(cr, p.x, p.y, 3, 0, 2 * M_PI);
+        cairo_fill(cr);
+    }
+
+    return FALSE;
+}
+
 
 
 int main(int argc, char *argv[]) {
-
     gtk_init(&argc, &argv);
 
-
-
+    // 🔹 Create Main Window
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(window), "Function Graph Editor");
+    gtk_window_set_default_size(GTK_WINDOW(window), 1900, 1000);
 
-    gtk_window_set_title(GTK_WINDOW(window), "Image Filtering App");
+    // 🔹 Main Layout (VBox to hold menu & content)
+    GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(window), main_vbox);
 
-    gtk_window_set_default_size(GTK_WINDOW(window), 1500, 1000);
-
-    gtk_container_set_border_width(GTK_CONTAINER(window), 10);
-
-
-
-    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-
-    gtk_container_add(GTK_CONTAINER(window), vbox);
-
-
-
+    // 🔹 Create Menu Bar
     GtkWidget *menu_bar = create_menu_bar(window);
+    gtk_box_pack_start(GTK_BOX(main_vbox), menu_bar, FALSE, FALSE, 0);
 
-    gtk_box_pack_start(GTK_BOX(vbox), menu_bar, FALSE, FALSE, 0);
+    // 🔹 Split Area Using GtkPaned
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_pack_start(GTK_BOX(main_vbox), paned, TRUE, TRUE, 0);
 
-
-
+    // 🔹 Left Side: Image Display
     scrolled_window = gtk_scrolled_window_new(NULL, NULL);
-
-    gtk_widget_set_vexpand(scrolled_window, TRUE);
-
-    gtk_widget_set_hexpand(scrolled_window, TRUE);
-
-    gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 5);
-
-
-
-    image_area = gtk_image_new();
-
+    image_area = gtk_image_new();  // Initialize it before adding to container
     gtk_container_add(GTK_CONTAINER(scrolled_window), image_area);
+    gtk_paned_pack1(GTK_PANED(paned), scrolled_window, TRUE, FALSE);
 
+    // 🔹 Right Side: Graph Editor
+    GtkWidget *graph_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    GtkWidget *drawing_area = gtk_drawing_area_new();
+    gtk_widget_set_size_request(drawing_area, 256, 256);
 
+    // 🔹 Add Padding to Graph
+    gtk_widget_set_margin_start(drawing_area, 20);
+    gtk_widget_set_margin_end(drawing_area, 20);
+    gtk_widget_set_margin_top(drawing_area, 20);
+    gtk_widget_set_margin_bottom(drawing_area, 20);
 
+    // 🔹 Ensure Graph is Centered
+    gtk_widget_set_halign(drawing_area, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(drawing_area, GTK_ALIGN_CENTER);
+
+    gtk_box_pack_start(GTK_BOX(graph_container), drawing_area, TRUE, TRUE, 10);
+    gtk_paned_pack2(GTK_PANED(paned), graph_container, TRUE, FALSE);
+
+    // 🔹 Ensure image area takes more space initially
+    gtk_paned_set_position(GTK_PANED(paned), 1200);
+
+    // 🔹 Enable event handling BEFORE connecting signals
+    gtk_widget_add_events(drawing_area, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK);
+
+    // 🔹 Connect Drawing & Events
+    g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_function_graph), NULL);
+    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_press), NULL);
+    g_signal_connect(drawing_area, "motion-notify-event", G_CALLBACK(on_mouse_drag), NULL);
+    g_signal_connect(drawing_area, "button-release-event", G_CALLBACK(on_mouse_release), NULL);
+
+    // 🔹 Show window
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
-
     gtk_widget_show_all(window);
-
     gtk_main();
 
-
-
     return 0;
-
 }
+
+
