@@ -452,6 +452,8 @@ void update_ckernel_size(GtkWidget *widget, gpointer data) {
             gtk_widget_set_sensitive(kernel_entries[y][x], is_active);
         }
     }
+    gtk_spin_button_set_range(GTK_SPIN_BUTTON(anchor_x_spin), 0, ckernel_size - 1);
+    gtk_spin_button_set_range(GTK_SPIN_BUTTON(anchor_y_spin), 0, ckernel_size - 1);
 }
 
 void auto_compute_divisor(GtkWidget *widget, gpointer data) {
