@@ -64,63 +64,7 @@ void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
 }
 
-void load_image(GtkWidget *widget, gpointer data) {
 
-    GtkWidget *dialog = gtk_file_chooser_dialog_new("Open Image",
-
-        GTK_WINDOW(data),
-
-        GTK_FILE_CHOOSER_ACTION_OPEN,
-
-        "_Cancel", GTK_RESPONSE_CANCEL,
-
-        "_Open", GTK_RESPONSE_ACCEPT,
-
-        NULL);
-
-
-
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-
-        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-
-        original_image = cv::imread(filename, cv::IMREAD_COLOR);
-
-        if (original_image.empty()) {
-
-            std::cerr << "Error loading image!" << std::endl;
-
-            return;
-
-        }
-
-
-
-        cv::cvtColor(original_image, image, cv::COLOR_BGR2RGB);
-
-        g_free(filename);
-
-
-
-        GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
-
-            image.data, GDK_COLORSPACE_RGB, FALSE, 8,
-
-            image.cols, image.rows, image.step, NULL, NULL
-
-        );
-
-
-
-        gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
-
-        gtk_widget_set_size_request(image_area, image.cols, image.rows);
-
-    }
-
-    gtk_widget_destroy(dialog);
-
-}
 
 void apply_inversion(GtkWidget *widget, gpointer data) {
 
@@ -638,6 +582,90 @@ void save_image(GtkWidget *widget, gpointer data) {
 
 }
 
+void update_image_display(GdkPixbuf *pixbuf) {
+    if (!image_area || !pixbuf) return;
+
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
+    gtk_widget_queue_draw(image_area);
+}
+
+void load_image(GtkWidget *widget, gpointer data) {
+    GtkWidget *dialog = gtk_file_chooser_dialog_new(
+        "Open Image", GTK_WINDOW(data),
+        GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Open", GTK_RESPONSE_ACCEPT,
+        NULL
+    );
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+
+        // Load the image using OpenCV
+        image = cv::imread(filename, cv::IMREAD_COLOR);
+
+        // Ensure image is valid before processing
+        if (!image.empty()) {
+            cv::cvtColor(image, image, cv::COLOR_BGR2RGB);  // Convert from BGR to RGB
+
+            // Convert OpenCV Mat to GdkPixbuf
+            GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+                image.data, GDK_COLORSPACE_RGB, FALSE, 8,
+                image.cols, image.rows, image.step, NULL, NULL
+            );
+
+            update_image_display(pixbuf);
+        }
+
+        g_free(filename);
+    }
+    gtk_widget_destroy(dialog);
+}
+
+void apply_graph_filter() {
+    if (image.empty() || points.size() < 2) return;
+
+    // Generate Lookup Table (LUT) from the function graph
+    std::vector<int> lut(256, 0);
+
+    for (int i = 0; i < 256; i++) {
+        double x = i / 255.0;  // Normalize intensity to [0, 1]
+        double y = 0;          
+
+        // 🔹 Find the two closest points in the function graph
+        for (size_t j = 0; j < points.size() - 1; j++) {
+            if (x >= points[j].x / 255.0 && x <= points[j + 1].x / 255.0) {
+                double x1 = points[j].x / 255.0;
+                double y1 = points[j].y / 255.0;
+                double x2 = points[j + 1].x / 255.0;
+                double y2 = points[j + 1].y / 255.0;
+
+                // Linear interpolation formula
+                double t = (x - x1) / (x2 - x1);
+                y = y1 + t * (y2 - y1);
+                break;
+            }
+        }
+
+        // Convert back to [0,255] range and clamp
+        lut[i] = static_cast<int>(std::clamp(y * 255, 0.0, 255.0));
+    }
+
+    // 🔹 Apply LUT Transformation using apply_filter()
+    apply_filter([&lut](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        return cv::Vec3b(
+            lut[pixel[0]],  // Red channel
+            lut[pixel[1]],  // Green channel
+            lut[pixel[2]]   // Blue channel
+        );
+    });
+
+    // 🔹 Update the image display on the left
+    update_image_display(NULL);
+}
+
+
 GtkWidget* create_menu_bar(GtkWidget *window) {
 
 
@@ -714,6 +742,8 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
     GtkWidget *restore_item = gtk_menu_item_new_with_label("Restore Original");
 
+    GtkWidget *custom_filter = gtk_menu_item_new_with_label("Functional Filter");
+
 
 
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), invert_item);
@@ -730,6 +760,8 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
     gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), restore_item);
 
+    gtk_menu_shell_append(GTK_MENU_SHELL(filter_menu), custom_filter);
+
 
 
     g_signal_connect(invert_item, "activate", G_CALLBACK(apply_inversion), NULL);
@@ -745,6 +777,8 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     g_signal_connect(remove_gamma, "activate", G_CALLBACK(apply_gamma_dark),NULL);
 
     g_signal_connect(restore_item, "activate", G_CALLBACK(restore_original), NULL);
+
+    g_signal_connect(custom_filter, "activate", G_CALLBACK(apply_graph_filter), NULL);
 
 
 
@@ -810,14 +844,46 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
 }
 
-void update_image_display(GdkPixbuf *pixbuf) {
-    if (!image_area) return;  // Prevent crashes
+static gboolean on_mouse_press(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    if (event->button == 1) { // Left Click: Select point without moving
+        for (size_t i = 0; i < points.size(); i++) {
+            if (std::abs(points[i].x - event->x) < 5 && std::abs(points[i].y - event->y) < 5) {
+                selected_index = i;  // Select point, but don't move yet
+                return TRUE;
+            }
+        }
+        selected_index = -1; // No point selected
+    }
 
-    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
-    gtk_widget_queue_draw(image_area);  // Force redraw
+    if (event->button == 3) { // Right Click: Delete point
+        for (size_t i = 0; i < points.size(); i++) {
+            if (std::abs(points[i].x - event->x) < 5 && std::abs(points[i].y - event->y) < 5) {
+                if (i == 0 || i == points.size() - 1) return FALSE; // Don't delete first & last points
+                points.erase(points.begin() + i);
+                gtk_widget_queue_draw(widget);
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
 }
 
-// 🔹 Ensure Image Updates When a Point is Added
+static gboolean on_mouse_drag(GtkWidget *widget, GdkEventMotion *event, gpointer data) { 
+    if (selected_index >= 0) {  // Only move if a point was selected previously
+        points[selected_index].y = std::clamp(static_cast<int>(event->y), 0, 255);
+        gtk_widget_queue_draw(widget);
+    }
+    return TRUE;
+}
+
+static gboolean on_mouse_release(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    if (event->button == 1) {  // Left-click release
+        selected_index = -1;  // Reset selection after movement
+    }
+    return TRUE;
+}
+
 static gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer data) {
     if (event->button == 1 && selected_index == -1) { // Only add if no point was selected
         GdkPoint new_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
@@ -827,103 +893,10 @@ static gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointe
         points.insert(it, new_point);
 
         gtk_widget_queue_draw(widget);
-        
-        // 🔹 Update Image
-        update_image_display(NULL);
     }
     return TRUE;
 }
 
-// 🔹 Ensure Image Updates When Dragging a Point
-static gboolean on_mouse_drag(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
-    if (dragging_index >= 0) {  // Move only if a point was selected before dragging
-        points[dragging_index].y = std::clamp(static_cast<int>(event->y), 0, 255);
-        gtk_widget_queue_draw(widget);
-
-        // 🔹 Update Image
-        update_image_display(NULL);
-    }
-    return TRUE;
-}
-
-// 🔹 Ensure Image Updates When Selecting or Deleting a Point
-static gboolean on_mouse_press(GtkWidget *widget, GdkEventButton *event, gpointer data) {
-    if (event->button == 1) { // Left Click: Select point without moving immediately
-        for (size_t i = 0; i < points.size(); i++) {
-            if (std::abs(points[i].x - event->x) < 5 && std::abs(points[i].y - event->y) < 5) {
-                selected_index = i;  // Select point, but don't move yet
-                dragging_index = i;  // Mark for dragging
-                return TRUE;
-            }
-        }
-        selected_index = -1; // No point selected
-        dragging_index = -1;
-    }
-
-    if (event->button == 3) { // Right Click: Delete point
-        for (size_t i = 0; i < points.size(); i++) {
-            if (std::abs(points[i].x - event->x) < 5 && std::abs(points[i].y - event->y) < 5) {
-                if (i == 0 || i == points.size() - 1) return FALSE; // Don't delete first & last points
-                points.erase(points.begin() + i);
-                gtk_widget_queue_draw(widget);
-
-                // 🔹 Update Image
-                update_image_display(NULL);
-                return TRUE;
-            }
-        }
-    }
-
-    return FALSE;
-}
-
-// 🔹 Ensure Image Updates When Releasing Drag
-static gboolean on_mouse_release(GtkWidget *widget, GdkEventButton *event, gpointer data) {
-    if (event->button == 1) {  // Left-click release
-        dragging_index = -1;  // Stop dragging
-
-        // 🔹 Update Image
-        update_image_display(NULL);
-    }
-    return TRUE;
-}
-
-// 🔹 Function to Apply Graph Filter using `apply_filter()`
-void apply_function_graph_filter() {
-    if (image.empty() || points.size() < 2) return;
-
-    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
-        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
-
-        // Apply function graph mapping
-        auto interpolate = [](double x) -> double {
-            if (points.size() < 2) return x;
-            
-            for (size_t i = 0; i < points.size() - 1; i++) {
-                if (x >= points[i].x && x <= points[i + 1].x) {
-                    double x1 = points[i].x / 255.0;
-                    double y1 = points[i].y / 255.0;
-                    double x2 = points[i + 1].x / 255.0;
-                    double y2 = points[i + 1].y / 255.0;
-
-                    double t = (x - x1) / (x2 - x1);
-                    return y1 + t * (y2 - y1);
-                }
-            }
-            return x;  // Default to identity
-        };
-
-        return cv::Vec3b(
-            std::clamp(static_cast<int>(interpolate(pixel[0]) * 255), 0, 255),
-            std::clamp(static_cast<int>(interpolate(pixel[1]) * 255), 0, 255),
-            std::clamp(static_cast<int>(interpolate(pixel[2]) * 255), 0, 255)
-        );
-    });
-
-    update_image_display(NULL);
-}
-
-// 🔹 Ensure Function Graph Draws Correctly
 static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
     cairo_set_source_rgb(cr, 1, 1, 1); // White background
     cairo_paint(cr);
@@ -956,7 +929,6 @@ static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer dat
 
     return FALSE;
 }
-
 
 
 int main(int argc, char *argv[]) {
@@ -1006,14 +978,17 @@ int main(int argc, char *argv[]) {
     // 🔹 Ensure image area takes more space initially
     gtk_paned_set_position(GTK_PANED(paned), 1200);
 
-    // 🔹 Enable event handling BEFORE connecting signals
-    gtk_widget_add_events(drawing_area, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK);
+    // 🔹 Enable Event Handling for Mouse Input
+    gtk_widget_add_events(drawing_area, 
+        GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK);
 
-    // 🔹 Connect Drawing & Events
+    // 🔹 Connect Signals to Graph Drawing and Mouse Events
     g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_function_graph), NULL);
-    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_press), NULL);
-    g_signal_connect(drawing_area, "motion-notify-event", G_CALLBACK(on_mouse_drag), NULL);
-    g_signal_connect(drawing_area, "button-release-event", G_CALLBACK(on_mouse_release), NULL);
+    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_click), NULL);  // 🔹 Generates new points
+    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_press), NULL);  // 🔹 Handles selection & deletion
+    g_signal_connect(drawing_area, "motion-notify-event", G_CALLBACK(on_mouse_drag), NULL);  // 🔹 Handles dragging
+    g_signal_connect(drawing_area, "button-release-event", G_CALLBACK(on_mouse_release), NULL);  // 🔹 Handles release
+
 
     // 🔹 Show window
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
@@ -1022,5 +997,6 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
 
 
