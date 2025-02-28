@@ -822,6 +822,44 @@ void load_brightness_more(GtkWidget *widget, gpointer data){
 
 }
 
+void load_contrast_filter(GtkWidget *widget, gpointer data){
+
+    points.clear();
+    GdkPoint point1, point2, point3, point4;
+
+    point1.x = 0; point1.y = 255;
+    point2.x = (contrast_center *  contrast_coeff - contrast_center) / contrast_coeff; point2.y = 255;
+    point3.x = (255 + contrast_center *  contrast_coeff - contrast_center) / contrast_coeff; point3.y = 0;
+    point4.x = 255; point4.y = 0;
+
+    points.push_back(point1);
+    points.push_back(point2);
+    points.push_back(point3);
+    points.push_back(point4);
+
+    gtk_widget_queue_draw(drawing_area); 
+    gtk_widget_queue_resize(drawing_area);
+
+
+}
+
+void load_invertion_filter(GtkWidget *widget, gpointer data){
+
+    points.clear();
+    GdkPoint point1, point2, point3, point4;
+
+    point1.x = 0; point1.y = 0;
+    point2.x = 255; point2.y = 255;
+
+    points.push_back(point1);
+    points.push_back(point2);
+
+    gtk_widget_queue_draw(drawing_area); 
+    gtk_widget_queue_resize(drawing_area);
+
+
+}
+
 GtkWidget* create_menu_bar(GtkWidget *window) {
 
     // Setting up the menu bar
@@ -932,16 +970,22 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     GtkWidget *reset_filter_ = gtk_menu_item_new_with_label("Reset Filter");
     GtkWidget *less_brightness_load = gtk_menu_item_new_with_label("Load -Brightness");
     GtkWidget *more_brightness_load = gtk_menu_item_new_with_label("Load +Brightness");
+    GtkWidget *contrast_load = gtk_menu_item_new_with_label("Load Contrast");
+    GtkWidget *invertion_load = gtk_menu_item_new_with_label("Load Invertion");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(ffilter_menu), custom_filter);
     gtk_menu_shell_append(GTK_MENU_SHELL(ffilter_menu), reset_filter_);
     gtk_menu_shell_append(GTK_MENU_SHELL(ffilter_menu), less_brightness_load);
     gtk_menu_shell_append(GTK_MENU_SHELL(ffilter_menu), more_brightness_load);
+    gtk_menu_shell_append(GTK_MENU_SHELL(ffilter_menu), contrast_load);
+    gtk_menu_shell_append(GTK_MENU_SHELL(ffilter_menu), invertion_load);
 
     g_signal_connect(custom_filter, "activate", G_CALLBACK(apply_graph_filter), NULL);
     g_signal_connect(reset_filter_, "activate", G_CALLBACK(reset_filter), NULL);
     g_signal_connect(less_brightness_load, "activate", G_CALLBACK(load_brightness_less), NULL);
     g_signal_connect(more_brightness_load, "activate", G_CALLBACK(load_brightness_more), NULL);
+    g_signal_connect(contrast_load, "activate", G_CALLBACK(load_contrast_filter), NULL);
+    g_signal_connect(invertion_load, "activate", G_CALLBACK(load_invertion_filter), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), ffilter_menu_item);
 
