@@ -26,6 +26,7 @@ std::vector<GdkPoint> points = {{0, 255}, {255, 0}};
 static int dragging_index = -1;
 static int selected_index = -1;
 GtkWidget *drawing_area;
+const int threshold = 10;
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
@@ -826,29 +827,34 @@ static gboolean on_mouse_release(GtkWidget *widget, GdkEventButton *event, gpoin
 }
 
 static gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer data) {
-    if (event->button == 1 && selected_index == -1) { 
-        // Left-click: Add a new point
-        GdkPoint new_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
+      // Define proximity threshold for moving a point
 
-        auto it = std::lower_bound(points.begin(), points.end(), new_point,
-            [](const GdkPoint &a, const GdkPoint &b) { return a.x < b.x; });
-        points.insert(it, new_point);
+    GdkPoint clicked_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
+
+    // Find the closest point to the clicked position
+    auto closest_it = std::min_element(points.begin(), points.end(), 
+        [&clicked_point](const GdkPoint &a, const GdkPoint &b) {
+            int dist_a = std::pow(a.x - clicked_point.x, 2) + std::pow(a.y - clicked_point.y, 2);
+            int dist_b = std::pow(b.x - clicked_point.x, 2) + std::pow(b.y - clicked_point.y, 2);
+            return dist_a < dist_b;
+        });
+
+    if (event->button == 1 && selected_index == -1) {  // Left-click
+
+        if (closest_it != points.end() && std::abs(closest_it->x - clicked_point.x) < threshold) {
+            // If close to an existing point, move it to the new y-coordinate
+            closest_it->y = clicked_point.y;
+        } else {
+            // Otherwise, insert a new point while keeping the list sorted by x
+            auto it = std::lower_bound(points.begin(), points.end(), clicked_point,
+                [](const GdkPoint &a, const GdkPoint &b) { return a.x < b.x; });
+            points.insert(it, clicked_point);
+        }
 
         gtk_widget_queue_draw(widget);
     }
-    else if (event->button == 3) { 
-        // Right-click: Remove the nearest point
+    else if (event->button == 3) {  // Right-click: Remove the nearest point
         if (!points.empty()) {
-            GdkPoint click_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
-
-            // Find the closest point
-            auto closest_it = std::min_element(points.begin(), points.end(), 
-                [&click_point](const GdkPoint &a, const GdkPoint &b) {
-                    int dist_a = std::pow(a.x - click_point.x, 2) + std::pow(a.y - click_point.y, 2);
-                    int dist_b = std::pow(b.x - click_point.x, 2) + std::pow(b.y - click_point.y, 2);
-                    return dist_a < dist_b;
-                });
-
             if (closest_it != points.end() && closest_it->x != 0 && closest_it->x != 255) {
                 points.erase(closest_it);
                 gtk_widget_queue_draw(widget);
