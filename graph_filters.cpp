@@ -826,7 +826,8 @@ static gboolean on_mouse_release(GtkWidget *widget, GdkEventButton *event, gpoin
 }
 
 static gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer data) {
-    if (event->button == 1 && selected_index == -1) { // Only add if no point was selected
+    if (event->button == 1 && selected_index == -1) { 
+        // Left-click: Add a new point
         GdkPoint new_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
 
         auto it = std::lower_bound(points.begin(), points.end(), new_point,
@@ -835,8 +836,28 @@ static gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointe
 
         gtk_widget_queue_draw(widget);
     }
+    else if (event->button == 3) { 
+        // Right-click: Remove the nearest point
+        if (!points.empty()) {
+            GdkPoint click_point = {static_cast<int>(event->x), static_cast<int>(event->y)};
+
+            // Find the closest point
+            auto closest_it = std::min_element(points.begin(), points.end(), 
+                [&click_point](const GdkPoint &a, const GdkPoint &b) {
+                    int dist_a = std::pow(a.x - click_point.x, 2) + std::pow(a.y - click_point.y, 2);
+                    int dist_b = std::pow(b.x - click_point.x, 2) + std::pow(b.y - click_point.y, 2);
+                    return dist_a < dist_b;
+                });
+
+            if (closest_it != points.end() && closest_it->x != 0 && closest_it->x != 255) {
+                points.erase(closest_it);
+                gtk_widget_queue_draw(widget);
+            }
+        }
+    }
     return TRUE;
 }
+
 
 static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
     cairo_set_source_rgb(cr, 1, 1, 1); // White background
@@ -852,7 +873,6 @@ static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer dat
     }
     cairo_stroke(cr);
 
-    // Draw the polyline
     cairo_set_source_rgb(cr, 0, 1, 0); // Green Line
     cairo_set_line_width(cr, 2);
     for (size_t i = 0; i < points.size() - 1; i++) {
@@ -861,7 +881,6 @@ static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer dat
     }
     cairo_stroke(cr);
 
-    // Draw Points
     cairo_set_source_rgb(cr, 1, 0, 0); // Red Points
     for (const auto &p : points) {
         cairo_arc(cr, p.x, p.y, 3, 0, 2 * M_PI);
@@ -875,63 +894,50 @@ static gboolean draw_function_graph(GtkWidget *widget, cairo_t *cr, gpointer dat
 int main(int argc, char *argv[]) {
     gtk_init(&argc, &argv);
 
-    // 🔹 Create Main Window
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Function Graph Editor");
     gtk_window_set_default_size(GTK_WINDOW(window), 1900, 1000);
 
-    // 🔹 Main Layout (VBox to hold menu & content)
     GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(window), main_vbox);
 
-    // 🔹 Create Menu Bar
     GtkWidget *menu_bar = create_menu_bar(window);
     gtk_box_pack_start(GTK_BOX(main_vbox), menu_bar, FALSE, FALSE, 0);
 
-    // 🔹 Split Area Using GtkPaned
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_box_pack_start(GTK_BOX(main_vbox), paned, TRUE, TRUE, 0);
 
-    // 🔹 Left Side: Image Display
     scrolled_window = gtk_scrolled_window_new(NULL, NULL);
-    image_area = gtk_image_new();  // Initialize it before adding to container
+    image_area = gtk_image_new();
     gtk_container_add(GTK_CONTAINER(scrolled_window), image_area);
     gtk_paned_pack1(GTK_PANED(paned), scrolled_window, TRUE, FALSE);
 
-    // 🔹 Right Side: Graph Editor
     GtkWidget *graph_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     drawing_area = gtk_drawing_area_new();
     gtk_widget_set_size_request(drawing_area, 256, 256);
 
-    // 🔹 Add Padding to Graph
     gtk_widget_set_margin_start(drawing_area, 20);
     gtk_widget_set_margin_end(drawing_area, 20);
     gtk_widget_set_margin_top(drawing_area, 20);
     gtk_widget_set_margin_bottom(drawing_area, 20);
 
-    // 🔹 Ensure Graph is Centered
     gtk_widget_set_halign(drawing_area, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(drawing_area, GTK_ALIGN_CENTER);
 
     gtk_box_pack_start(GTK_BOX(graph_container), drawing_area, TRUE, TRUE, 10);
     gtk_paned_pack2(GTK_PANED(paned), graph_container, TRUE, FALSE);
 
-    // 🔹 Ensure image area takes more space initially
     gtk_paned_set_position(GTK_PANED(paned), 1200);
 
-    // 🔹 Enable Event Handling for Mouse Input
     gtk_widget_add_events(drawing_area, 
         GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK);
 
-    // 🔹 Connect Signals to Graph Drawing and Mouse Events
     g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_function_graph), NULL);
-    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_click), NULL);  // 🔹 Generates new points
-    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_press), NULL);  // 🔹 Handles selection & deletion
-    g_signal_connect(drawing_area, "motion-notify-event", G_CALLBACK(on_mouse_drag), NULL);  // 🔹 Handles dragging
-    g_signal_connect(drawing_area, "button-release-event", G_CALLBACK(on_mouse_release), NULL);  // 🔹 Handles release
+    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_click), NULL); 
+    g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_press), NULL);  
+    g_signal_connect(drawing_area, "motion-notify-event", G_CALLBACK(on_mouse_drag), NULL);
+    g_signal_connect(drawing_area, "button-release-event", G_CALLBACK(on_mouse_release), NULL);
 
-
-    // 🔹 Show window
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
     gtk_widget_show_all(window);
     gtk_main();
