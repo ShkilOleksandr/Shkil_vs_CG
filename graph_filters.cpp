@@ -491,28 +491,28 @@ void apply_emboss(GtkWidget *widget, gpointer data) {
 
 }
 
-void restore_original(GtkWidget *widget, gpointer data) {
-
-    if (original_image.empty()) return;
-
-
-
-    cv::cvtColor(original_image, image, cv::COLOR_BGR2RGB);
-
-
-
-    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
-
-        image.data, GDK_COLORSPACE_RGB, FALSE, 8,
-
-        image.cols, image.rows, image.step, NULL, NULL
-
-    );
-
-
+void update_image_display(GdkPixbuf *pixbuf) {
+    if (!image_area || !pixbuf) return;
 
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
+    gtk_widget_queue_draw(image_area);
+}
 
+void restore_original(GtkWidget *widget, gpointer data) {
+    if (original_image.empty()) {
+        std::cerr << "Error: No original image stored!" << std::endl;
+        return;
+    }
+
+    image = original_image.clone();
+
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+        image.data, GDK_COLORSPACE_RGB, FALSE, 8,
+        image.cols, image.rows, image.step, NULL, NULL
+    );
+
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
+    gtk_widget_queue_draw(image_area);
 }
 
 void save_image(GtkWidget *widget, gpointer data) {
@@ -583,13 +583,6 @@ void save_image(GtkWidget *widget, gpointer data) {
 
 }
 
-void update_image_display(GdkPixbuf *pixbuf) {
-    if (!image_area || !pixbuf) return;
-
-    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
-    gtk_widget_queue_draw(image_area);
-}
-
 void load_image(GtkWidget *widget, gpointer data) {
     GtkWidget *dialog = gtk_file_chooser_dialog_new(
         "Open Image", GTK_WINDOW(data),
@@ -605,66 +598,69 @@ void load_image(GtkWidget *widget, gpointer data) {
         // Load the image using OpenCV
         image = cv::imread(filename, cv::IMREAD_COLOR);
 
-        // Ensure image is valid before processing
         if (!image.empty()) {
             cv::cvtColor(image, image, cv::COLOR_BGR2RGB);  // Convert from BGR to RGB
 
-            // Convert OpenCV Mat to GdkPixbuf
+            // 🔹 Correctly store a **separate copy** of the original image
+            original_image = image.clone();
+
             GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
                 image.data, GDK_COLORSPACE_RGB, FALSE, 8,
                 image.cols, image.rows, image.step, NULL, NULL
             );
 
             update_image_display(pixbuf);
+        } else {
+            std::cerr << "Error: Failed to load image!" << std::endl;
         }
 
         g_free(filename);
     }
+
     gtk_widget_destroy(dialog);
 }
+
+
 
 void apply_graph_filter() {
     if (image.empty() || points.size() < 2) return;
 
-    // Generate Lookup Table (LUT) from the function graph
-    std::vector<int> lut(256, 0);
-
-    for (int i = 0; i < 256; i++) {
-        double x = i / 255.0;  // Normalize intensity to [0, 1]
-        double y = 0;          
-
-        // 🔹 Find the two closest points in the function graph
-        for (size_t j = 0; j < points.size() - 1; j++) {
-            if (x >= points[j].x / 255.0 && x <= points[j + 1].x / 255.0) {
-                double x1 = points[j].x / 255.0;
-                double y1 = points[j].y / 255.0;
-                double x2 = points[j + 1].x / 255.0;
-                double y2 = points[j + 1].y / 255.0;
-
-                // Linear interpolation formula
-                double t = (x - x1) / (x2 - x1);
-                y = y1 + t * (y2 - y1);
-                break;
-            }
-        }
-
-        // Convert back to [0,255] range and clamp
-        lut[i] = static_cast<int>(std::clamp(y * 255, 0.0, 255.0));
-    }
-
-    // 🔹 Apply LUT Transformation using apply_filter()
-    apply_filter([&lut](const cv::Mat &img, int x, int y) -> cv::Vec3b {
-        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
-        return cv::Vec3b(
-            lut[pixel[0]],  // Red channel
-            lut[pixel[1]],  // Green channel
-            lut[pixel[2]]   // Blue channel
-        );
+    std::sort(points.begin(), points.end(), [](const GdkPoint &a, const GdkPoint &b) {
+        return a.x < b.x;
     });
 
-    // 🔹 Update the image display on the left
-    update_image_display(NULL);
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        
+        cv::Vec3b pixel = image.at<cv::Vec3b>(y, x);
+
+        for (int channel = 0; channel < 3; channel++){
+            int channel_value = static_cast<int>(pixel[channel]);
+            for (size_t j = 0; j < points.size() - 1; j++) {
+                if (channel_value >= points[j].x && channel_value <= points[j + 1].x) {
+                    double x1 = points[j].x;
+                    double y1 = points[j].y;
+                    double x2 = points[j + 1].x;
+                    double y2 = points[j + 1].y;
+
+
+                    double t = (channel_value - x1) / (x2 - x1);
+                    
+                    pixel[channel] = cv::saturate_cast<uchar>(255 - (y1 + t * (y2 - y1)));
+                    break;
+                }
+            }
+        }
+        return pixel;
+    });
+
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+        image.data, GDK_COLORSPACE_RGB, FALSE, 8,
+        image.cols, image.rows, image.step, NULL, NULL
+    );
+    
+    update_image_display(pixbuf);
 }
+
 
 void reset_filter() {
     // 🔹 Reset graph to default identity mapping: (0,0) and (255,255)
