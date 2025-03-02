@@ -1,3 +1,17 @@
+// Sources
+
+// https://docs.gtk.org/gtk3/
+// https://docs.gtk.org/gtk3/method.Box.pack_start.html
+// https://docs.gtk.org/gtk3/method.Box.pack_end.html
+// https://docs.gtk.org/gtk3/class.FileChooserDialog.html
+// https://docs.gtk.org/gtk3/class.Paned.html
+
+// https://docs.opencv.org/4.x/
+// https://docs.opencv.org/4.x/db/deb/tutorial_display_image.html
+// https://docs.opencv.org/4.x/d8/d01/group__imgproc__color__conversions.html
+// https://docs.opencv.org/4.x/d4/d13/tutorial_py_filtering.html
+
+
 #include <gtk/gtk.h>
 #include <opencv2/opencv.hpp>
 #include <iostream>
