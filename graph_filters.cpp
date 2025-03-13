@@ -41,6 +41,12 @@ std::vector<GdkPoint> points = {{0, 255}, {255, 0}};
 GtkWidget *drawing_area;
 const int threshold = 20;
 
+
+// Pixelize
+
+int pixelize_size = 100;
+
+
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
     if (image.empty()) return;
@@ -209,6 +215,48 @@ void apply_blur(GtkWidget *widget, gpointer data) {
 
     });
 
+}
+
+void apply_pixelize(int pixelize_size) {
+    if (image.empty()) return;
+
+    cv::Mat new_image = image.clone();
+
+    for (int y = 0; y < image.rows; y += pixelize_size) {
+        for (int x = 0; x < image.cols; x += pixelize_size) {
+
+            cv::Vec3i sum(0, 0, 0);
+            int count = 0;
+
+            for (int dy = 0; dy < pixelize_size && (y + dy) < image.rows; ++dy) {
+                for (int dx = 0; dx < pixelize_size && (x + dx) < image.cols; ++dx) {
+                    sum += image.at<cv::Vec3b>(y + dy, x + dx);
+                    ++count;
+                }
+            }
+
+            cv::Vec3b avg_color = sum / count;
+
+            for (int dy = 0; dy < pixelize_size && (y + dy) < image.rows; ++dy) {
+                for (int dx = 0; dx < pixelize_size && (x + dx) < image.cols; ++dx) {
+                    new_image.at<cv::Vec3b>(y + dy, x + dx) = avg_color;
+                }
+            }
+        }
+    }
+
+    image = new_image;
+
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+        image.data, GDK_COLORSPACE_RGB, FALSE, 8,
+        image.cols, image.rows, image.step, NULL, NULL
+    );
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
+}
+
+void pixelize(GtkWidget *widget, gpointer data) {
+    
+    apply_pixelize(pixelize_size);
 }
 
 cv::Mat generate_gauss_kernel(int size, double sigma) {
@@ -1003,6 +1051,23 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), ffilter_menu_item);
 
+
+    // Pixelize
+
+
+    GtkWidget *pixelize_menu = gtk_menu_new();
+    GtkWidget *pixelize_menu_item = gtk_menu_item_new_with_label("Pixelize");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(pixelize_menu_item), pixelize_menu);
+
+
+    GtkWidget *apply_pixelize = gtk_menu_item_new_with_label("Apply");
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(pixelize_menu), apply_pixelize);
+
+    g_signal_connect(apply_pixelize, "activate", G_CALLBACK(pixelize),NULL);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), pixelize_menu_item);
+
 }
 
     return menu_bar;
@@ -1047,6 +1112,7 @@ int main(int argc, char *argv[]) {
 
     gtk_paned_set_position(GTK_PANED(paned), 1200);
 
+
     gtk_widget_add_events(drawing_area, 
         GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
 
@@ -1060,6 +1126,5 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
 
 
