@@ -18,6 +18,7 @@
 #include <functional>
 #include <math.h>
 #include <fstream>
+#include <cstdlib>
 
 
 cv::Mat image, original_image;
@@ -45,6 +46,10 @@ const int threshold = 20;
 // Pixelize
 
 int pixelize_size = 100;
+
+// Dithering
+
+int num_shades = 2;
 
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
@@ -257,6 +262,71 @@ void apply_pixelize(int pixelize_size) {
 void pixelize(GtkWidget *widget, gpointer data) {
     
     apply_pixelize(pixelize_size);
+}
+
+void apply_greyscale(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+        
+        uchar grey_value = static_cast<uchar>(
+            0.299 * pixel[0] + 0.587 * pixel[1] + 0.114 * pixel[2]);
+
+        return cv::Vec3b(grey_value, grey_value, grey_value);
+    });
+}
+
+void apply_random_dithering(GtkWidget *widget, gpointer data) {
+    apply_filter([](const cv::Mat &img, int x, int y) -> cv::Vec3b {
+        cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+
+        bool is_greyscale = (pixel[0] == pixel[1] && pixel[1] == pixel[2]);
+
+        int levels = num_shades; // Correct number of quantization levels
+        if (levels < 2) levels = 2; // Ensure at least 2 levels
+
+        int step = 255 / (levels - 1); // Distance between quantization levels
+
+        if (is_greyscale) {
+            // Convert to grayscale using luminance
+            uchar grey_value = pixel[0];
+
+            int threshold = rand() % step; // Random threshold for dithering
+
+            int lower_level = (grey_value / step) * step;
+            int upper_level = std::min(lower_level + step, 255);
+
+            // Apply dithering: Decide whether to round up or down
+            uchar dithered_value = (grey_value % step > threshold) ? upper_level : lower_level;
+
+            return cv::Vec3b(dithered_value, dithered_value, dithered_value);
+        } else {
+            // Process each color channel independently
+            cv::Vec3b dithered_pixel;
+            for (int c = 0; c < 3; c++) {
+                int threshold = rand() % step; // Random threshold for dithering
+
+                int lower_level = (pixel[c] / step) * step;
+                int upper_level = std::min(lower_level + step, 255);
+
+                // Apply dithering per channel
+                dithered_pixel[c] = (pixel[c] % step > threshold) ? upper_level : lower_level;
+            }
+            return dithered_pixel;
+        }
+    });
+}
+
+void update_num_shades(GtkWidget *widget, gpointer data) {
+    num_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
+}
+
+GtkWidget* create_shades_slider() {
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
+    gtk_range_set_value(GTK_RANGE(scale), num_shades);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_shades), NULL);
+    return scale;
 }
 
 cv::Mat generate_gauss_kernel(int size, double sigma) {
@@ -952,7 +1022,6 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_item);
 
     //Pixel filters
-
 {
 
     GtkWidget *filter_menu = gtk_menu_new();
@@ -992,7 +1061,6 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 }
 
     // Kernel filters
-
 {
 
     GtkWidget *kfilter_menu = gtk_menu_new();
@@ -1020,7 +1088,6 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), kfilter_menu_item);
 
 }
-
 
     // Functional filter
 {
@@ -1050,11 +1117,10 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     g_signal_connect(invertion_load, "activate", G_CALLBACK(load_invertion_filter), NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), ffilter_menu_item);
-
+}
 
     // Pixelize
-
-
+{
     GtkWidget *pixelize_menu = gtk_menu_new();
     GtkWidget *pixelize_menu_item = gtk_menu_item_new_with_label("Pixelize");
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(pixelize_menu_item), pixelize_menu);
@@ -1067,6 +1133,24 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
     g_signal_connect(apply_pixelize, "activate", G_CALLBACK(pixelize),NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), pixelize_menu_item);
+
+}
+    //Greyscale
+{
+    GtkWidget *grey_menu = gtk_menu_new();
+    GtkWidget *grey_menu_item = gtk_menu_item_new_with_label("Grey");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(grey_menu_item), grey_menu);
+
+    GtkWidget *apply_greying = gtk_menu_item_new_with_label("Apply greying");
+    GtkWidget *apply_dith = gtk_menu_item_new_with_label("Apply Random Dithering");
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(grey_menu), apply_greying);
+    gtk_menu_shell_append(GTK_MENU_SHELL(grey_menu), apply_dith);
+
+    g_signal_connect(apply_greying, "activate", G_CALLBACK(apply_greyscale),NULL);
+    g_signal_connect(apply_dith, "activate", G_CALLBACK(apply_random_dithering),NULL);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), grey_menu_item);
 
 }
 
@@ -1119,6 +1203,8 @@ int main(int argc, char *argv[]) {
     g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_function_graph), NULL);
     g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_click), drawing_area); 
 
+    GtkWidget *slider = create_shades_slider();
+    gtk_box_pack_start(GTK_BOX(main_vbox), slider, FALSE, FALSE, 5);
 
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
     gtk_widget_show_all(window);
