@@ -281,34 +281,29 @@ void apply_random_dithering(GtkWidget *widget, gpointer data) {
 
         bool is_greyscale = (pixel[0] == pixel[1] && pixel[1] == pixel[2]);
 
-        int levels = num_shades; // Correct number of quantization levels
-        if (levels < 2) levels = 2; // Ensure at least 2 levels
-
-        int step = 255 / (levels - 1); // Distance between quantization levels
+        int levels = num_shades;
+        if (levels < 2) levels = 2;
+        int step = 255 / (levels - 1); 
 
         if (is_greyscale) {
-            // Convert to grayscale using luminance
             uchar grey_value = pixel[0];
 
-            int threshold = rand() % step; // Random threshold for dithering
+            int threshold = rand() % step; 
 
             int lower_level = (grey_value / step) * step;
             int upper_level = std::min(lower_level + step, 255);
 
-            // Apply dithering: Decide whether to round up or down
             uchar dithered_value = (grey_value % step > threshold) ? upper_level : lower_level;
 
             return cv::Vec3b(dithered_value, dithered_value, dithered_value);
         } else {
-            // Process each color channel independently
             cv::Vec3b dithered_pixel;
             for (int c = 0; c < 3; c++) {
-                int threshold = rand() % step; // Random threshold for dithering
+                int threshold = rand() % step;
 
                 int lower_level = (pixel[c] / step) * step;
                 int upper_level = std::min(lower_level + step, 255);
 
-                // Apply dithering per channel
                 dithered_pixel[c] = (pixel[c] % step > threshold) ? upper_level : lower_level;
             }
             return dithered_pixel;
@@ -320,13 +315,24 @@ void update_num_shades(GtkWidget *widget, gpointer data) {
     num_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
 }
 
-GtkWidget* create_shades_slider() {
-    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
+GtkWidget* create_labeled_shades_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2); 
+
+    GtkWidget *label = gtk_label_new("Number of Color values per channel:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 255, 1);
     gtk_range_set_value(GTK_RANGE(scale), num_shades);
     gtk_scale_set_digits(GTK_SCALE(scale), 0);
     gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    gtk_widget_set_margin_bottom(scale, 5);
+
     g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_shades), NULL);
-    return scale;
+
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
 }
 
 cv::Mat generate_gauss_kernel(int size, double sigma) {
@@ -1180,6 +1186,9 @@ int main(int argc, char *argv[]) {
     gtk_paned_pack1(GTK_PANED(paned), scrolled_window, TRUE, FALSE);
 
     GtkWidget *graph_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    
+    GtkWidget *slider_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+
     drawing_area = gtk_drawing_area_new();
     gtk_widget_set_size_request(drawing_area, 256, 256);
 
@@ -1191,20 +1200,19 @@ int main(int argc, char *argv[]) {
     gtk_widget_set_halign(drawing_area, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(drawing_area, GTK_ALIGN_CENTER);
 
-    gtk_box_pack_start(GTK_BOX(graph_container), drawing_area, TRUE, TRUE, 10);
+    GtkWidget *slider = create_labeled_shades_slider();
+
+    gtk_box_pack_start(GTK_BOX(slider_box), drawing_area, TRUE, TRUE, 10);
+    gtk_box_pack_start(GTK_BOX(slider_box), slider, FALSE, FALSE, 5);
+
+    gtk_box_pack_start(GTK_BOX(graph_container), slider_box, TRUE, TRUE, 10);
     gtk_paned_pack2(GTK_PANED(paned), graph_container, TRUE, FALSE);
 
     gtk_paned_set_position(GTK_PANED(paned), 1200);
 
-
-    gtk_widget_add_events(drawing_area, 
-        GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
-
+    gtk_widget_add_events(drawing_area, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
     g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_function_graph), NULL);
     g_signal_connect(drawing_area, "button-press-event", G_CALLBACK(on_mouse_click), drawing_area); 
-
-    GtkWidget *slider = create_shades_slider();
-    gtk_box_pack_start(GTK_BOX(main_vbox), slider, FALSE, FALSE, 5);
 
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
     gtk_widget_show_all(window);
