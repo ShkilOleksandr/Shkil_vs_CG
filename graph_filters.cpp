@@ -19,6 +19,9 @@
 #include <math.h>
 #include <fstream>
 #include <cstdlib>
+#include <vector>
+#include <queue>
+#include <map>
 
 
 cv::Mat image, original_image;
@@ -50,6 +53,97 @@ int pixelize_size = 100;
 // Dithering
 
 int num_shades = 2;
+
+//  Oct
+
+int num_colors = 256;
+
+// Define an Octree node
+struct OctreeNode {
+    bool isLeaf = false;
+    int pixelCount = 0;
+    cv::Vec3i colorSum = {0, 0, 0};
+    std::vector<OctreeNode*> children = std::vector<OctreeNode*>(8, nullptr);
+};
+
+// Class for managing the Octree
+class OctreeQuantizer {
+private:
+    OctreeNode* root;
+    int maxColors;
+    std::vector<OctreeNode*> reducibleNodes;
+
+    int getColorIndex(const cv::Vec3b& color, int level) {
+        int index = 0;
+        int mask = 128 >> level; // Shift bit mask
+        if (color[2] & mask) index |= 4; // Red
+        if (color[1] & mask) index |= 2; // Green
+        if (color[0] & mask) index |= 1; // Blue
+        return index;
+    }
+
+    void insertColor(OctreeNode*& node, const cv::Vec3b& color, int level) {
+        if (!node) node = new OctreeNode();
+        if (level == 8) {
+            node->isLeaf = true;
+            node->pixelCount++;
+            node->colorSum += cv::Vec3i(color);
+        } else {
+            int index = getColorIndex(color, level);
+            insertColor(node->children[index], color, level + 1);
+            if (!node->isLeaf) reducibleNodes.push_back(node);
+        }
+    }
+
+    void reduceTree() {
+        while (reducibleNodes.size() > maxColors) {
+            OctreeNode* node = reducibleNodes.back();
+            reducibleNodes.pop_back();
+
+            cv::Vec3i mergedColor = {0, 0, 0};
+            int totalPixels = 0;
+
+            for (auto& child : node->children) {
+                if (child) {
+                    mergedColor += child->colorSum;
+                    totalPixels += child->pixelCount;
+                    delete child;
+                    child = nullptr;
+                }
+            }
+            node->isLeaf = true;
+            node->colorSum = mergedColor;
+            node->pixelCount = totalPixels;
+        }
+    }
+
+    cv::Vec3b getQuantizedColor(const cv::Vec3b& color, OctreeNode* node, int level) {
+        if (!node || node->isLeaf) {
+            return cv::Vec3b(node->colorSum / node->pixelCount);
+        }
+        int index = getColorIndex(color, level);
+        return getQuantizedColor(color, node->children[index], level + 1);
+    }
+
+public:
+    OctreeQuantizer(int maxColors) : root(nullptr), maxColors(maxColors) {}
+
+    void quantize(cv::Mat& image) {
+        for (int y = 0; y < image.rows; y++) {
+            for (int x = 0; x < image.cols; x++) {
+                insertColor(root, image.at<cv::Vec3b>(y, x), 0);
+            }
+        }
+
+        reduceTree();
+
+        for (int y = 0; y < image.rows; y++) {
+            for (int x = 0; x < image.cols; x++) {
+                image.at<cv::Vec3b>(y, x) = getQuantizedColor(image.at<cv::Vec3b>(y, x), root, 0);
+            }
+        }
+    }
+};
 
 
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
@@ -309,6 +403,47 @@ void apply_random_dithering(GtkWidget *widget, gpointer data) {
             return dithered_pixel;
         }
     });
+}
+
+void apply_octree_quantization(GtkWidget *widget, gpointer data) {
+    if (image.empty()) return;
+
+    OctreeQuantizer quantizer(num_colors);
+    quantizer.quantize(image);
+
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+        image.data, GDK_COLORSPACE_RGB, FALSE, 8,
+        image.cols, image.rows, image.step, NULL, NULL
+    );
+
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
+    gtk_widget_queue_draw(image_area);
+}
+
+void update_num_colors(GtkWidget *widget, gpointer data) {
+    num_colors = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
+    std::cout << "Max colors set to: " << num_colors << std::endl;
+}
+
+// Function to create the slider
+GtkWidget* create_labeled_color_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+
+    GtkWidget *label = gtk_label_new("Maximum Colors:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
+    gtk_range_set_value(GTK_RANGE(scale), num_colors);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    gtk_widget_set_margin_bottom(scale, 5);
+
+    g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_colors), NULL);
+
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
 }
 
 void update_num_shades(GtkWidget *widget, gpointer data) {
@@ -1149,12 +1284,15 @@ GtkWidget* create_menu_bar(GtkWidget *window) {
 
     GtkWidget *apply_greying = gtk_menu_item_new_with_label("Apply greying");
     GtkWidget *apply_dith = gtk_menu_item_new_with_label("Apply Random Dithering");
+    GtkWidget *apply_oct = gtk_menu_item_new_with_label("Apply Octree Quantization");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(grey_menu), apply_greying);
     gtk_menu_shell_append(GTK_MENU_SHELL(grey_menu), apply_dith);
+    gtk_menu_shell_append(GTK_MENU_SHELL(grey_menu), apply_oct);
 
     g_signal_connect(apply_greying, "activate", G_CALLBACK(apply_greyscale),NULL);
     g_signal_connect(apply_dith, "activate", G_CALLBACK(apply_random_dithering),NULL);
+    g_signal_connect(apply_oct, "activate", G_CALLBACK(apply_octree_quantization),NULL);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), grey_menu_item);
 
@@ -1201,9 +1339,11 @@ int main(int argc, char *argv[]) {
     gtk_widget_set_valign(drawing_area, GTK_ALIGN_CENTER);
 
     GtkWidget *slider = create_labeled_shades_slider();
+    GtkWidget *color_slider = create_labeled_color_slider();
 
     gtk_box_pack_start(GTK_BOX(slider_box), drawing_area, TRUE, TRUE, 10);
     gtk_box_pack_start(GTK_BOX(slider_box), slider, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(slider_box), color_slider, FALSE, FALSE, 5);
 
     gtk_box_pack_start(GTK_BOX(graph_container), slider_box, TRUE, TRUE, 10);
     gtk_paned_pack2(GTK_PANED(paned), graph_container, TRUE, FALSE);
