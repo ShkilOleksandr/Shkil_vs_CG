@@ -167,9 +167,10 @@ class OctreeNode {
             if (child) {
                 colorSum += child->colorSum;
                 pixelCount += child->pixelCount;
-                child.reset();
+                child.reset(); // Remove child
             }
         }
+        paletteIndex = -1;  // Reset palette index when merging
     }
     std::vector<cv::Vec3b> OctreeQuantizer::finalizePalette() {
         palette.clear();
@@ -195,49 +196,48 @@ class OctreeNode {
     // Create a color palette
     std::vector<cv::Vec3b> OctreeQuantizer::makePalette(int colorCount) {
         palette.clear();
-        std::queue<OctreeNode*> queue;
         std::vector<OctreeNode*> leaves;
-        queue.push(root);
     
-        // Gather leaves
-        while (!queue.empty()) {
-            OctreeNode* node = queue.front();
-            queue.pop();
-            if (node->isLeaf()) {
-                leaves.push_back(node);
+        // Step 1: Explicitly collect leaf nodes
+        std::queue<OctreeNode*> q;
+        q.push(root);
+    
+        while (!q.empty()) {
+            OctreeNode* current = q.front();
+            q.pop();
+    
+            if (current->isLeaf()) {
+                leaves.push_back(current);
             } else {
-                for (auto& child : node->children) {
-                    if (child) queue.push(child.get());
+                for (auto& child : current->children) {
+                    if (child) q.push(child.get());
                 }
             }
         }
     
         int totalLeaves = leaves.size();
     
-        // ✅ Important check: if leaves are already fewer than or equal to desired colors, no merge
+        // Early exit if no merging is required
         if (totalLeaves <= colorCount) {
-            std::cout << "✅ No merging needed, leaf nodes (" << totalLeaves << ") <= colorCount (" << colorCount << ")" << std::endl;
             return finalizePalette();
         }
     
-        // Merging needed: From bottom-up, until desired leaves reached
-        for (int level = MAX_DEPTH - 1; level >= 0 && totalLeaves > colorCount; level--) {
-            for (OctreeNode* node : levels[level]) {
-                if (node->isLeaf()) continue; // Can't merge leaf nodes
+        // Merge leaves starting from the bottom-most nodes
+        for (int level = MAX_DEPTH - 1; level >= 0 && totalLeaves > colorCount; --level) {
+            for (auto node : levels[level]) {
+                if (!node->isLeaf()) {
+                    int leavesMerged = 0;
+                    for (auto& child : node->children) {
+                        if (child && child->isLeaf()) leavesMerged++;
+                    }
     
-                int removedLeaves = 0;
-                for (auto& child : node->children) {
-                    if (child && child->isLeaf()) removedLeaves++;
+                    if (leavesMerged > 0) {
+                        node->removeLeaves();
+                        totalLeaves -= (leavesMerged - 1);
+                        if (totalLeaves <= colorCount) break;
+                    }
                 }
-    
-                if (removedLeaves == 0) continue; // No leaves to merge here
-    
-                node->removeLeaves();  // merge leaves
-                totalLeaves -= (removedLeaves - 1); // Merging removes (N-1) leaves
-    
-                if (totalLeaves <= colorCount) break;
             }
-            if (totalLeaves <= colorCount) break;
         }
     
         return finalizePalette();
@@ -247,32 +247,28 @@ class OctreeNode {
     
     
     
+    
     // Get palette index for a given color
     int OctreeQuantizer::getPaletteIndex(const cv::Vec3b& color) {
         OctreeNode* node = root;
-        for (int level = 0; level < MAX_DEPTH; level++) {
+    
+        for (int level = 0; level <= MAX_DEPTH; level++) {
             if (node->isLeaf()) return node->paletteIndex;
             int index = node->getColorIndexForLevel(color, level);
-    
-            if (node->children[index]) {
-                node = node->children[index].get();
-            } else {
-                break;  // Exit loop if we reach a missing child
-            }
+            if (!node->children[index]) break;
+            node = node->children[index].get();
         }
     
-        // Find the closest color in the palette
-        int closestIndex = 0;
-        int minDist = INT_MAX;
-    
+        // Fallback: nearest color search
+        int bestIndex = 0, minDist = INT_MAX;
         for (size_t i = 0; i < palette.size(); i++) {
-            int dist = cv::norm(palette[i] - color, cv::NORM_L2);  // Euclidean distance
+            int dist = cv::norm(palette[i] - color);
             if (dist < minDist) {
                 minDist = dist;
-                closestIndex = i;
+                bestIndex = i;
             }
         }
-        return closestIndex;  // Always return a valid index
+        return bestIndex;
     }
     
     
