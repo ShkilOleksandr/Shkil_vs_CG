@@ -60,14 +60,14 @@ int num_shades = 2;
 int num_colors = 1000;
 
 
-// Define an Octree node
-class OctreeQuantizer;  // Forward declaration
+
+class OctreeQuantizer;  
 
 class OctreeNode {
     public:
-        cv::Vec3i colorSum = {0, 0, 0};  // Sum of RGB values
-        int pixelCount = 0;              // Number of pixels in this node
-        int paletteIndex = -1;           // Index in the color palette
+        cv::Vec3i colorSum = {0, 0, 0};  
+        int pixelCount = 0;              
+        int paletteIndex = -1;           
         std::array<std::unique_ptr<OctreeNode>, 8> children;
     
         OctreeNode(int level, OctreeQuantizer& parent);
@@ -99,7 +99,7 @@ class OctreeNode {
     public:
         static constexpr int MAX_DEPTH = 8;
         OctreeNode* root;
-        std::vector<OctreeNode*> levels[MAX_DEPTH];  // Store nodes at different levels
+        std::vector<OctreeNode*> levels[MAX_DEPTH]; 
         std::vector<cv::Vec3b> palette;
     
         OctreeQuantizer() { root = new OctreeNode(0, *this); }
@@ -119,24 +119,21 @@ class OctreeNode {
         ~OctreeQuantizer() { delete root; }
     };
     
-    // Constructor
     OctreeNode::OctreeNode(int level, OctreeQuantizer& parent) {
         if (level < OctreeQuantizer::MAX_DEPTH - 1) {
             parent.addLevelNode(level, this);
         }
     }
     
-    // Get index of `color` at given `level`
     int OctreeNode::getColorIndexForLevel(const cv::Vec3b& color, int level) {
         int index = 0;
         int mask = 0x80 >> level;
-        if (color[0] & mask) index |= 4;  // Red
-        if (color[1] & mask) index |= 2;  // Green
-        if (color[2] & mask) index |= 1;  // Blue
+        if (color[0] & mask) index |= 4; 
+        if (color[1] & mask) index |= 2;  
+        if (color[2] & mask) index |= 1; 
         return index;
     }   
     
-    // Insert color into Octree
     void OctreeNode::addColor(const cv::Vec3b& color, int level, OctreeQuantizer& parent) {
         if (level >= OctreeQuantizer::MAX_DEPTH) {
             colorSum += cv::Vec3i(color);
@@ -148,25 +145,23 @@ class OctreeNode {
     
         if (!children[index]) {
             children[index] = std::make_unique<OctreeNode>(level + 1, parent);
-            parent.addLevelNode(level + 1, children[index].get()); // 🚀 THIS IS CRUCIAL!
+            parent.addLevelNode(level + 1, children[index].get());
         }
     
         children[index]->addColor(color, level + 1, parent);
     }
     
-    
-    
-    // Reduce tree and merge colors
     void OctreeNode::removeLeaves() {
         for (auto& child : children) {
             if (child) {
                 colorSum += child->colorSum;
                 pixelCount += child->pixelCount;
-                child.reset(); // Remove child
+                child.reset();
             }
         }
-        paletteIndex = -1;  // Reset palette index when merging
+        paletteIndex = -1;
     }
+
     std::vector<cv::Vec3b> OctreeQuantizer::finalizePalette() {
         palette.clear();
         std::queue<OctreeNode*> queue;
@@ -188,11 +183,9 @@ class OctreeNode {
         return palette;
     }
     
-    // Create a color palette
     std::vector<cv::Vec3b> OctreeQuantizer::makePalette(int colorCount) {
         palette.clear();
     
-        // Helper to count leaves
         auto countLeaves = [&]() {
             int count = 0;
             std::queue<OctreeNode*> q;
@@ -212,17 +205,13 @@ class OctreeNode {
     
         int totalLeaves = countLeaves();
     
-        // No merging needed
         if (totalLeaves <= colorCount) {
-            std::cout << "✅ Already have enough colors (" << totalLeaves << ")" << std::endl;
             return finalizePalette();
         }
     
-        // Merge nodes carefully bottom-up, level-by-level
         for (int level = MAX_DEPTH - 1; level >= 0 && totalLeaves > colorCount; --level) {
             auto& nodes = levels[level];
     
-            // Sort nodes by pixel count (merge least important first)
             std::sort(nodes.begin(), nodes.end(), [](OctreeNode* a, OctreeNode* b) {
                 return a->pixelCount < b->pixelCount;
             });
@@ -237,7 +226,7 @@ class OctreeNode {
                     }
                     if (leavesMerged > 0) {
                         node->removeLeaves();
-                        totalLeaves -= (leavesMerged - 1);  // Each merge reduces leaf count by (mergedLeaves - 1)
+                        totalLeaves -= (leavesMerged - 1);
                     }
                     if (totalLeaves <= colorCount) break;
                 }
@@ -248,8 +237,6 @@ class OctreeNode {
         return finalizePalette();
     }
     
-        
-    // Get palette index for a given color
     int OctreeQuantizer::getPaletteIndex(const cv::Vec3b& color) {
         OctreeNode* node = root;
     
@@ -260,7 +247,6 @@ class OctreeNode {
             node = node->children[index].get();
         }
     
-        // Fallback: nearest color search
         int bestIndex = 0, minDist = INT_MAX;
         for (size_t i = 0; i < palette.size(); i++) {
             int dist = cv::norm(palette[i] - color);
@@ -272,8 +258,6 @@ class OctreeNode {
         return bestIndex;
     }
     
-    
-
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
     if (image.empty()) return;
@@ -535,32 +519,28 @@ void apply_random_dithering(GtkWidget *widget, gpointer data) {
 
 void apply_octree_quantization(GtkWidget *widget, gpointer data) {
     if (image.empty()) {
-        std::cerr << "❌ ERROR: No image loaded!" << std::endl;
+        std::cerr << "ERROR: No image loaded!" << std::endl;
         return;
     }
 
     OctreeQuantizer quantizer;
 
-    // Step 1: Build the Octree (Print debug info every 100,000 pixels)
+    #pragma omp parallel for
     for (int y = 0; y < image.rows; y++) {
         for (int x = 0; x < image.cols; x++) {
-            if ((y * image.cols + x) % 100000 == 0) {  
-                std::cout << "Processing pixel: " << y << "," << x << std::endl;
-            }
+            
             quantizer.addColor(image.at<cv::Vec3b>(y, x));
         }
     }
 
-    // Step 2: Generate the Color Palette
     std::vector<cv::Vec3b> palette = quantizer.makePalette(num_colors);
 
     if (palette.empty()) {
-        std::cerr << "❌ ERROR: Generated empty palette!" << std::endl;
+        std::cerr << "ERROR: Generated empty palette!" << std::endl;
         return;
     }
 
-    // Step 3: Apply the Palette to the Image (🚀 Parallelized)
-    #pragma omp parallel for  // 🚀 Enables multi-threading
+    #pragma omp parallel for 
     for (int y = 0; y < image.rows; y++) {
         for (int x = 0; x < image.cols; x++) {
             int index = quantizer.getPaletteIndex(image.at<cv::Vec3b>(y, x));
@@ -568,13 +548,12 @@ void apply_octree_quantization(GtkWidget *widget, gpointer data) {
             if (index >= 0 && index < (int)palette.size()) {
                 image.at<cv::Vec3b>(y, x) = palette[index];
             } else {
-                std::cerr << "❌ ERROR: Invalid Palette Index! Defaulting to black." << std::endl;
+                std::cerr << "ERROR: Invalid Palette Index! Defaulting to black." << std::endl;
                 image.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0);
             }
         }
     }
 
-    // Step 4: Update the GTK Image Display
     GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
         image.data, GDK_COLORSPACE_RGB, FALSE, 8,
         image.cols, image.rows, image.step, NULL, NULL
@@ -582,38 +561,16 @@ void apply_octree_quantization(GtkWidget *widget, gpointer data) {
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
 }
 
-
-
-
-
-
 void update_num_colors(GtkWidget *widget, gpointer data) {
     num_colors = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
 }
 
-// Function to create the slider
-GtkWidget* create_labeled_color_slider() {
-    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-
-    GtkWidget *label = gtk_label_new("Maximum Colors:");
-    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
-
-    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, 1000, 1);
-    gtk_range_set_value(GTK_RANGE(scale), num_colors);
-    gtk_scale_set_digits(GTK_SCALE(scale), 0);
-    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
-    gtk_widget_set_margin_bottom(scale, 5);
-
-    g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_colors), NULL);
-
-    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
-    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
-
-    return slider_container;
-}
-
 void update_num_shades(GtkWidget *widget, gpointer data) {
     num_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
+}
+
+void on_pixelize_slider_changed(GtkRange *range, gpointer data) {
+    pixelize_size = gtk_range_get_value(range);
 }
 
 GtkWidget* create_labeled_shades_slider() {
@@ -629,6 +586,43 @@ GtkWidget* create_labeled_shades_slider() {
     gtk_widget_set_margin_bottom(scale, 5);
 
     g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_shades), NULL);
+
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
+}
+
+GtkWidget* create_pixelize_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+
+    GtkWidget *label = gtk_label_new("Pixelize Size:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, 100, 1);
+    gtk_range_set_value(GTK_RANGE(scale), pixelize_size);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    
+    g_signal_connect(scale, "value-changed", G_CALLBACK(on_pixelize_slider_changed), NULL);
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
+}
+
+GtkWidget* create_labeled_color_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+
+    GtkWidget *label = gtk_label_new("Maximum Colors:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, 1000, 1);
+    gtk_range_set_value(GTK_RANGE(scale), num_colors);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    gtk_widget_set_margin_bottom(scale, 5);
+
+    g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_colors), NULL);
 
     gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
     gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
@@ -1021,8 +1015,8 @@ void load_image(GtkWidget *widget, gpointer data) {
 
             original_image = image.clone();
 
-            std::cout << "✅ Image Loaded: " << filename << std::endl;
-            std::cout << "📏 Image Size: " << image.cols << "x" << image.rows << std::endl;
+            std::cout << "Image Loaded: " << filename << std::endl;
+            std::cout << "Image Size: " << image.cols << "x" << image.rows << std::endl;
 
             GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
                 image.data, GDK_COLORSPACE_RGB, FALSE, 8,
@@ -1031,7 +1025,7 @@ void load_image(GtkWidget *widget, gpointer data) {
 
             update_image_display(pixbuf);
         } else {
-            std::cerr << "❌ ERROR: Failed to load image!" << std::endl;
+            std::cerr << "ERROR: Failed to load image!" << std::endl;
         }
 
         g_free(filename);
@@ -1039,7 +1033,6 @@ void load_image(GtkWidget *widget, gpointer data) {
 
     gtk_widget_destroy(dialog);
 }
-
 
 void apply_graph_filter() {
     if (image.empty() || points.size() < 2) return;
@@ -1510,8 +1503,10 @@ int main(int argc, char *argv[]) {
 
     GtkWidget *slider = create_labeled_shades_slider();
     GtkWidget *color_slider = create_labeled_color_slider();
+    GtkWidget *pixelize_slider = create_pixelize_slider();
 
     gtk_box_pack_start(GTK_BOX(slider_box), drawing_area, TRUE, TRUE, 10);
+    gtk_box_pack_start(GTK_BOX(slider_box), pixelize_slider, FALSE, FALSE, 5);
     gtk_box_pack_start(GTK_BOX(slider_box), slider, FALSE, FALSE, 5);
     gtk_box_pack_start(GTK_BOX(slider_box), color_slider, FALSE, FALSE, 5);
 
