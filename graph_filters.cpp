@@ -63,12 +63,6 @@ int num_colors = 1000;
 // Define an Octree node
 class OctreeQuantizer;  // Forward declaration
 
-struct Vec3bHash {
-    std::size_t operator()(const cv::Vec3b& color) const {
-        return std::hash<int>()(color[0] * 256 * 256 + color[1] * 256 + color[2]);
-    }
-};
-
 class OctreeNode {
     public:
         cv::Vec3i colorSum = {0, 0, 0};  // Sum of RGB values
@@ -196,58 +190,64 @@ class OctreeNode {
     // Create a color palette
     std::vector<cv::Vec3b> OctreeQuantizer::makePalette(int colorCount) {
         palette.clear();
-        std::vector<OctreeNode*> leaves;
     
-        // Step 1: Explicitly collect leaf nodes
-        std::queue<OctreeNode*> q;
-        q.push(root);
-    
-        while (!q.empty()) {
-            OctreeNode* current = q.front();
-            q.pop();
-    
-            if (current->isLeaf()) {
-                leaves.push_back(current);
-            } else {
-                for (auto& child : current->children) {
-                    if (child) q.push(child.get());
+        // Helper to count leaves
+        auto countLeaves = [&]() {
+            int count = 0;
+            std::queue<OctreeNode*> q;
+            q.push(root);
+            while (!q.empty()) {
+                OctreeNode* node = q.front();
+                q.pop();
+                if (node->isLeaf()) {
+                    count++;
+                } else {
+                    for (auto& child : node->children)
+                        if (child) q.push(child.get());
                 }
             }
-        }
+            return count;
+        };
     
-        int totalLeaves = leaves.size();
+        int totalLeaves = countLeaves();
     
-        // Early exit if no merging is required
+        // No merging needed
         if (totalLeaves <= colorCount) {
+            std::cout << "✅ Already have enough colors (" << totalLeaves << ")" << std::endl;
             return finalizePalette();
         }
     
-        // Merge leaves starting from the bottom-most nodes
+        // Merge nodes carefully bottom-up, level-by-level
         for (int level = MAX_DEPTH - 1; level >= 0 && totalLeaves > colorCount; --level) {
-            for (auto node : levels[level]) {
-                if (!node->isLeaf()) {
+            auto& nodes = levels[level];
+    
+            // Sort nodes by pixel count (merge least important first)
+            std::sort(nodes.begin(), nodes.end(), [](OctreeNode* a, OctreeNode* b) {
+                return a->pixelCount < b->pixelCount;
+            });
+    
+            for (OctreeNode* node : nodes) {
+                if (node && !node->isLeaf()) {
                     int leavesMerged = 0;
                     for (auto& child : node->children) {
-                        if (child && child->isLeaf()) leavesMerged++;
+                        if (child && child->isLeaf()) {
+                            leavesMerged++;
+                        }
                     }
-    
                     if (leavesMerged > 0) {
                         node->removeLeaves();
-                        totalLeaves -= (leavesMerged - 1);
-                        if (totalLeaves <= colorCount) break;
+                        totalLeaves -= (leavesMerged - 1);  // Each merge reduces leaf count by (mergedLeaves - 1)
                     }
+                    if (totalLeaves <= colorCount) break;
                 }
+                if (totalLeaves <= colorCount) break;
             }
         }
     
         return finalizePalette();
     }
     
-    
-    
-    
-    
-    
+        
     // Get palette index for a given color
     int OctreeQuantizer::getPaletteIndex(const cv::Vec3b& color) {
         OctreeNode* node = root;
