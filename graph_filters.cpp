@@ -146,13 +146,14 @@ class OctreeNode {
     
         int index = getColorIndexForLevel(color, level);
     
-        // 🚀 Ensure **only necessary nodes** are created
         if (!children[index]) {
-            children[index] = std::make_unique<OctreeNode>(level, parent);
+            children[index] = std::make_unique<OctreeNode>(level + 1, parent);
+            parent.addLevelNode(level + 1, children[index].get()); // 🚀 THIS IS CRUCIAL!
         }
     
         children[index]->addColor(color, level + 1, parent);
     }
+    
     
     
     // Reduce tree and merge colors
