@@ -61,235 +61,225 @@ int num_colors = 1000;
 
 
 
-class OctreeQuantizer;  
+class OctreeQuantizer;
 
 class OctreeNode {
-    public:
-        cv::Vec3i colorSum = {0, 0, 0};  
-        int pixelCount = 0;              
-        int paletteIndex = -1;           
-        std::array<std::unique_ptr<OctreeNode>, 8> children;
-    
-        OctreeNode(int level, OctreeQuantizer& parent);
-    
-        bool isLeaf() {
-            for (const auto& child : children) {
-                if (child) return false;
-            }
-            return true;
-        }
-    
-        int getColorIndexForLevel(const cv::Vec3b& color, int level);
-        
-        void addColor(const cv::Vec3b& color, int level, OctreeQuantizer& parent);
-    
-        void removeLeaves();
+public:
+    cv::Vec3i colorSum = {0, 0, 0};
+    int pixelCount = 0;
+    int paletteIndex = -1;
+    std::vector<std::pair<int, std::unique_ptr<OctreeNode>>> children;
 
-        void removeLeaf();
-    
-        cv::Vec3b getAverageColor() { 
-            return (pixelCount == 0) ? cv::Vec3b(0, 0, 0) : 
-                cv::Vec3b(colorSum[0] / pixelCount, colorSum[1] / pixelCount, colorSum[2] / pixelCount);
-        }
-        
-    
-        ~OctreeNode() {
-        }
-    };
-    
-    class OctreeQuantizer {
-    public:
-        static constexpr int MAX_DEPTH = 8;
-        OctreeNode* root;
-        std::vector<OctreeNode*> levels[MAX_DEPTH]; 
-        std::vector<cv::Vec3b> palette;
-    
-        OctreeQuantizer() { root = new OctreeNode(0, *this); }
-    
-        void addLevelNode(int level, OctreeNode* node) { levels[level].push_back(node); }
-    
-        void addColor(const cv::Vec3b& color) {
-            root->addColor(color, 0, *this);
-        }
-        
-        std::vector<cv::Vec3b> finalizePalette();
-    
-        std::vector<cv::Vec3b> makePalette(int colorCount);
-    
-        int getPaletteIndex(const cv::Vec3b& color);
-    
-        ~OctreeQuantizer() { delete root; }
-    };
-    
-    OctreeNode::OctreeNode(int level, OctreeQuantizer& parent) {
-        if (level < OctreeQuantizer::MAX_DEPTH - 1) {
-            parent.addLevelNode(level, this);
+    OctreeNode(int level, OctreeQuantizer& parent);
+
+    bool isLeaf() const {
+        return children.empty();
+    }
+
+    int getChildIndex(const cv::Vec3b& color, int level);
+    OctreeNode* getOrCreateChild(int index, int level, OctreeQuantizer& parent);
+
+    void addColor(const cv::Vec3b& color, int level, OctreeQuantizer& parent);
+
+    void removeLeaves();
+    void removeLeaf();
+
+    cv::Vec3b getAverageColor() {
+        return (pixelCount == 0) ? cv::Vec3b(0, 0, 0)
+                                 : cv::Vec3b(colorSum[0] / pixelCount, colorSum[1] / pixelCount, colorSum[2] / pixelCount);
+    }
+};
+
+class OctreeQuantizer {
+public:
+    static constexpr int MAX_DEPTH = 7;
+    OctreeNode* root;
+    std::vector<cv::Vec3b> palette;
+
+    OctreeQuantizer() { root = new OctreeNode(0, *this); }
+
+    void addColor(const cv::Vec3b& color) {
+        root->addColor(color, 0, *this);
+    }
+
+    std::vector<cv::Vec3b> finalizePalette();
+    std::vector<cv::Vec3b> makePalette(int colorCount);
+    int getPaletteIndex(const cv::Vec3b& color);
+
+    ~OctreeQuantizer() { delete root; }
+};
+
+
+OctreeNode::OctreeNode(int level, OctreeQuantizer& parent) {}
+
+int OctreeNode::getChildIndex(const cv::Vec3b& color, int level) {
+    int index = 0;
+    int mask = 0x80 >> level;
+    if (color[0] & mask) index |= 4;
+    if (color[1] & mask) index |= 2;
+    if (color[2] & mask) index |= 1;
+    return index;
+}
+
+OctreeNode* OctreeNode::getOrCreateChild(int index, int level, OctreeQuantizer& parent) {
+    for (auto& child : children)
+        if (child.first == index)
+            return child.second.get();
+
+    children.emplace_back(index, std::make_unique<OctreeNode>(level, parent));
+    return children.back().second.get();
+}
+
+void OctreeNode::addColor(const cv::Vec3b& color, int level, OctreeQuantizer& parent) {
+    if (level >= OctreeQuantizer::MAX_DEPTH) {
+        colorSum += cv::Vec3i(color);
+        pixelCount++;
+        return;
+    }
+
+    int index = getChildIndex(color, level);
+    OctreeNode* childNode = getOrCreateChild(index, level + 1, parent);
+    childNode->addColor(color, level + 1, parent);
+}
+
+void OctreeNode::removeLeaves() {
+    for (auto& childPair : children) {
+        colorSum += childPair.second->colorSum;
+        pixelCount += childPair.second->pixelCount;
+    }
+    children.clear();
+    paletteIndex = -1;
+}
+
+void OctreeNode::removeLeaf() {
+    if (children.empty()) return;
+
+    int minPixelCount = INT_MAX;
+    auto minIt = children.end();
+
+    for (auto it = children.begin(); it != children.end(); ++it) {
+        if (it->second->isLeaf() && it->second->pixelCount < minPixelCount) {
+            minPixelCount = it->second->pixelCount;
+            minIt = it;
         }
     }
-    
-    int OctreeNode::getColorIndexForLevel(const cv::Vec3b& color, int level) {
-        int index = 0;
-        int mask = 0x80 >> level;
-        if (color[0] & mask) index |= 4; 
-        if (color[1] & mask) index |= 2;  
-        if (color[2] & mask) index |= 1; 
-        return index;
-    }   
-    
-    void OctreeNode::addColor(const cv::Vec3b& color, int level, OctreeQuantizer& parent) {
-        if (level >= OctreeQuantizer::MAX_DEPTH) {
-            colorSum += cv::Vec3i(color);
-            pixelCount++;
-            return;
-        }
-    
-        int index = getColorIndexForLevel(color, level);
-    
-        if (!children[index]) {
-            children[index] = std::make_unique<OctreeNode>(level + 1, parent);
-            parent.addLevelNode(level + 1, children[index].get());
-        }
-    
-        children[index]->addColor(color, level + 1, parent);
-    }
-    
-    void OctreeNode::removeLeaves() {
-        for (auto& child : children) {
-            if (child) {
-                colorSum += child->colorSum;
-                pixelCount += child->pixelCount;
-                child.reset();
-            }
-        }
+
+    if (minIt != children.end()) {
+        colorSum += minIt->second->colorSum;
+        pixelCount += minIt->second->pixelCount;
+        children.erase(minIt);
         paletteIndex = -1;
     }
-    void OctreeNode::removeLeaf() {
-        int minPixelCount = INT_MAX;
-        int minIndex = -1;
-    
-        for (int i = 0; i < 8; ++i) {
-            if (children[i] && children[i]->isLeaf()) {
-                if (children[i]->pixelCount < minPixelCount) {
-                    minPixelCount = children[i]->pixelCount;
-                    minIndex = i;
-                }
-            }
-        }
-    
-        if (minIndex != -1) {
-            colorSum += children[minIndex]->colorSum;
-            pixelCount += children[minIndex]->pixelCount;
-            children[minIndex].reset();
-            paletteIndex = -1;
+}
+
+std::vector<cv::Vec3b> OctreeQuantizer::finalizePalette() {
+    palette.clear();
+    std::queue<OctreeNode*> queue;
+    queue.push(root);
+
+    while (!queue.empty()) {
+        OctreeNode* node = queue.front();
+        queue.pop();
+
+        if (node->isLeaf()) {
+            node->paletteIndex = palette.size();
+            palette.push_back(node->getAverageColor());
+        } else {
+            for (auto& childPair : node->children)
+                queue.push(childPair.second.get());
         }
     }
+    return palette;
+}
 
-    std::vector<cv::Vec3b> OctreeQuantizer::finalizePalette() {
-        palette.clear();
-        std::queue<OctreeNode*> queue;
-        queue.push(root);
-    
-        while (!queue.empty()) {
-            OctreeNode* node = queue.front();
-            queue.pop();
-    
+std::vector<cv::Vec3b> OctreeQuantizer::makePalette(int colorCount) {
+    palette.clear();
+
+    auto countLeaves = [&]() {
+        int count = 0;
+        std::queue<OctreeNode*> q;
+        q.push(root);
+        while (!q.empty()) {
+            OctreeNode* node = q.front();
+            q.pop();
             if (node->isLeaf()) {
-                node->paletteIndex = palette.size();
-                palette.push_back(node->getAverageColor());
+                count++;
             } else {
-                for (auto& child : node->children) {
-                    if (child) queue.push(child.get());
-                }
+                for (auto& childPair : node->children)
+                    q.push(childPair.second.get());
             }
         }
-        return palette;
-    }
-    
-    std::vector<cv::Vec3b> OctreeQuantizer::makePalette(int colorCount) {
-        palette.clear();
-    
-        auto countLeaves = [&]() {
-            int count = 0;
-            std::queue<OctreeNode*> q;
-            q.push(root);
-            while (!q.empty()) {
-                OctreeNode* node = q.front();
-                q.pop();
-                if (node->isLeaf()) {
-                    count++;
-                } else {
-                    for (auto& child : node->children)
-                        if (child) q.push(child.get());
-                }
-            }
-            return count;
-        };
-    
-        int totalLeaves = countLeaves();
-    
-        if (totalLeaves <= colorCount) {
-            return finalizePalette();
-        }
+        return count;
+    };
 
-        while(totalLeaves > colorCount){
-    
-        for (int level = MAX_DEPTH - 1; level >= 0 && totalLeaves > colorCount; --level) {
-            auto& nodes = levels[level];
-    
-            std::sort(nodes.begin(), nodes.end(), [](OctreeNode* a, OctreeNode* b) {
-                return a->pixelCount < b->pixelCount;
-            });
-    
-            for (OctreeNode* node : nodes) {
-                if (node && !node->isLeaf()) {
-                    int leavesMerged = 0;
-                    for (auto& child : node->children) {
-                        if (child && child->isLeaf()) {
-                            leavesMerged++;
-                        }
-                    }
-                    if (leavesMerged > 0) { 
-                        if(totalLeaves - leavesMerged + 1 == 1 && colorCount != 1){
-                            node->removeLeaf();
-                            if(leavesMerged > 1)
-                                totalLeaves--;
-                            leavesMerged--;
-                        }
-                        else{
-                            node->removeLeaves();
-                            totalLeaves -= (leavesMerged - 1);
-                        }
-                    }
-                    if (totalLeaves <= colorCount) break;
-                }
-                if (totalLeaves <= colorCount) break;
-            }
-        }
-    }
-    
+    int totalLeaves = countLeaves();
+
+    if (totalLeaves <= colorCount) {
         return finalizePalette();
     }
-    
-    int OctreeQuantizer::getPaletteIndex(const cv::Vec3b& color) {
-        OctreeNode* node = root;
-    
-        for (int level = 0; level <= MAX_DEPTH; level++) {
-            if (node->isLeaf()) return node->paletteIndex;
-            int index = node->getColorIndexForLevel(color, level);
-            if (!node->children[index]) break;
-            node = node->children[index].get();
-        }
-    
-        int bestIndex = 0, minDist = INT_MAX;
-        for (size_t i = 0; i < palette.size(); i++) {
-            int dist = cv::norm(palette[i] - color);
-            if (dist < minDist) {
-                minDist = dist;
-                bestIndex = i;
+
+    while (totalLeaves > colorCount) {
+        std::queue<OctreeNode*> q;
+        q.push(root);
+
+        while (!q.empty() && totalLeaves > colorCount) {
+            OctreeNode* node = q.front();
+            q.pop();
+
+            if (!node->isLeaf()) {
+                int leavesMerged = 0;
+                for (auto& childPair : node->children) {
+                    if (childPair.second->isLeaf()) {
+                        leavesMerged++;
+                    } else {
+                        q.push(childPair.second.get());
+                    }
+                }
+
+                if (leavesMerged > 0) {
+                    if (totalLeaves - leavesMerged + 1 == 1 && colorCount != 1) {
+                        node->removeLeaf();
+                        totalLeaves--;
+                    } else {
+                        node->removeLeaves();
+                        totalLeaves -= (leavesMerged - 1);
+                    }
+                }
             }
         }
-        return bestIndex;
     }
+
+    return finalizePalette();
+}
+
+int OctreeQuantizer::getPaletteIndex(const cv::Vec3b& color) {
+    OctreeNode* node = root;
+
+    for (int level = 0; level <= MAX_DEPTH; level++) {
+        if (node->isLeaf()) return node->paletteIndex;
+        int index = node->getChildIndex(color, level);
+
+        bool found = false;
+        for (auto& childPair : node->children) {
+            if (childPair.first == index) {
+                node = childPair.second.get();
+                found = true;
+                break;
+            }
+        }
+        if (!found) break;
+    }
+
+    int bestIndex = 0, minDist = INT_MAX;
+    for (size_t i = 0; i < palette.size(); i++) {
+        int dist = cv::norm(palette[i] - color);
+        if (dist < minDist) {
+            minDist = dist;
+            bestIndex = i;
+        }
+    }
+    return bestIndex;
+}
     
 void apply_filter(std::function<cv::Vec3b(const cv::Mat&, int, int)> filter) {
 
@@ -558,10 +548,8 @@ void apply_octree_quantization(GtkWidget *widget, gpointer data) {
 
     OctreeQuantizer quantizer;
 
-    #pragma omp parallel for
     for (int y = 0; y < image.rows; y++) {
         for (int x = 0; x < image.cols; x++) {
-            
             quantizer.addColor(image.at<cv::Vec3b>(y, x));
         }
     }
@@ -573,17 +561,11 @@ void apply_octree_quantization(GtkWidget *widget, gpointer data) {
         return;
     }
 
-    #pragma omp parallel for 
+    #pragma omp parallel for
     for (int y = 0; y < image.rows; y++) {
         for (int x = 0; x < image.cols; x++) {
             int index = quantizer.getPaletteIndex(image.at<cv::Vec3b>(y, x));
-
-            if (index >= 0 && index < (int)palette.size()) {
-                image.at<cv::Vec3b>(y, x) = palette[index];
-            } else {
-                std::cerr << "ERROR: Invalid Palette Index! Defaulting to black." << std::endl;
-                image.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0);
-            }
+            image.at<cv::Vec3b>(y, x) = palette[index];
         }
     }
 
@@ -593,6 +575,7 @@ void apply_octree_quantization(GtkWidget *widget, gpointer data) {
     );
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
 }
+
 
 void update_num_colors(GtkWidget *widget, gpointer data) {
     num_colors = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
