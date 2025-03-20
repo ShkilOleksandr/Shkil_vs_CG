@@ -84,6 +84,8 @@ class OctreeNode {
         void addColor(const cv::Vec3b& color, int level, OctreeQuantizer& parent);
     
         void removeLeaves();
+
+        void removeLeaf();
     
         cv::Vec3b getAverageColor() { 
             return (pixelCount == 0) ? cv::Vec3b(0, 0, 0) : 
@@ -161,6 +163,26 @@ class OctreeNode {
         }
         paletteIndex = -1;
     }
+    void OctreeNode::removeLeaf() {
+        int minPixelCount = INT_MAX;
+        int minIndex = -1;
+    
+        for (int i = 0; i < 8; ++i) {
+            if (children[i] && children[i]->isLeaf()) {
+                if (children[i]->pixelCount < minPixelCount) {
+                    minPixelCount = children[i]->pixelCount;
+                    minIndex = i;
+                }
+            }
+        }
+    
+        if (minIndex != -1) {
+            colorSum += children[minIndex]->colorSum;
+            pixelCount += children[minIndex]->pixelCount;
+            children[minIndex].reset();
+            paletteIndex = -1;
+        }
+    }
 
     std::vector<cv::Vec3b> OctreeQuantizer::finalizePalette() {
         palette.clear();
@@ -208,6 +230,8 @@ class OctreeNode {
         if (totalLeaves <= colorCount) {
             return finalizePalette();
         }
+
+        while(totalLeaves > colorCount){
     
         for (int level = MAX_DEPTH - 1; level >= 0 && totalLeaves > colorCount; --level) {
             auto& nodes = levels[level];
@@ -224,15 +248,24 @@ class OctreeNode {
                             leavesMerged++;
                         }
                     }
-                    if (leavesMerged > 0) {
-                        node->removeLeaves();
-                        totalLeaves -= (leavesMerged - 1);
+                    if (leavesMerged > 0) { 
+                        if(totalLeaves - leavesMerged + 1 == 1 && colorCount != 1){
+                            node->removeLeaf();
+                            if(leavesMerged > 1)
+                                totalLeaves--;
+                            leavesMerged--;
+                        }
+                        else{
+                            node->removeLeaves();
+                            totalLeaves -= (leavesMerged - 1);
+                        }
                     }
                     if (totalLeaves <= colorCount) break;
                 }
                 if (totalLeaves <= colorCount) break;
             }
         }
+    }
     
         return finalizePalette();
     }
