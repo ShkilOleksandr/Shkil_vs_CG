@@ -54,6 +54,9 @@ int pixelize_size = 100;
 // Dithering
 
 int num_shades = 2;
+int red_shades = 2;
+int green_shades = 2;
+int blue_shades = 2;
 
 //  Oct
 
@@ -510,14 +513,13 @@ void apply_random_dithering(GtkWidget *widget, gpointer data) {
 
         bool is_greyscale = (pixel[0] == pixel[1] && pixel[1] == pixel[2]);
 
-        int levels = num_shades;
-        if (levels < 2) levels = 2;
-        int step = 255 / (levels - 1); 
-
         if (is_greyscale) {
-            uchar grey_value = pixel[0];
+            int levels = num_shades;
+            if (levels < 2) levels = 2;
+            int step = 255 / (levels - 1);
 
-            int threshold = rand() % step; 
+            uchar grey_value = pixel[0];
+            int threshold = rand() % step;
 
             int lower_level = (grey_value / step) * step;
             int upper_level = std::min(lower_level + step, 255);
@@ -526,19 +528,45 @@ void apply_random_dithering(GtkWidget *widget, gpointer data) {
 
             return cv::Vec3b(dithered_value, dithered_value, dithered_value);
         } else {
+            int red_levels = std::max(2, red_shades);
+            int green_levels = std::max(2, green_shades);
+            int blue_levels = std::max(2, blue_shades);
+
+            int red_step = 255 / (red_levels - 1);
+            int green_step = 255 / (green_levels - 1);
+            int blue_step = 255 / (blue_levels - 1);
+
             cv::Vec3b dithered_pixel;
-            for (int c = 0; c < 3; c++) {
-                int threshold = rand() % step;
 
-                int lower_level = (pixel[c] / step) * step;
-                int upper_level = std::min(lower_level + step, 255);
-
-                dithered_pixel[c] = (pixel[c] % step > threshold) ? upper_level : lower_level;
+            // Blue channel
+            {
+                int threshold = rand() % blue_step;
+                int lower = (pixel[0] / blue_step) * blue_step;
+                int upper = std::min(lower + blue_step, 255);
+                dithered_pixel[0] = (pixel[0] % blue_step > threshold) ? upper : lower;
             }
+
+            // Green channel
+            {
+                int threshold = rand() % green_step;
+                int lower = (pixel[1] / green_step) * green_step;
+                int upper = std::min(lower + green_step, 255);
+                dithered_pixel[1] = (pixel[1] % green_step > threshold) ? upper : lower;
+            }
+
+            // Red channel
+            {
+                int threshold = rand() % red_step;
+                int lower = (pixel[2] / red_step) * red_step;
+                int upper = std::min(lower + red_step, 255);
+                dithered_pixel[2] = (pixel[2] % red_step > threshold) ? upper : lower;
+            }
+
             return dithered_pixel;
         }
     });
 }
+
 
 void apply_octree_quantization(GtkWidget *widget, gpointer data) {
     if (image.empty()) {
@@ -576,13 +604,24 @@ void apply_octree_quantization(GtkWidget *widget, gpointer data) {
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_area), pixbuf);
 }
 
-
 void update_num_colors(GtkWidget *widget, gpointer data) {
     num_colors = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
 }
 
 void update_num_shades(GtkWidget *widget, gpointer data) {
     num_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
+}
+
+void update_red_shades(GtkWidget *widget, gpointer data) {
+    red_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
+}
+
+void update_green_shades(GtkWidget *widget, gpointer data) {
+    green_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
+}
+
+void update_blue_shades(GtkWidget *widget, gpointer data) {
+    blue_shades = static_cast<int>(gtk_range_get_value(GTK_RANGE(widget)));
 }
 
 void on_pixelize_slider_changed(GtkRange *range, gpointer data) {
@@ -595,13 +634,73 @@ GtkWidget* create_labeled_shades_slider() {
     GtkWidget *label = gtk_label_new("Number of Color values per channel:");
     gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
 
-    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 255, 1);
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
     gtk_range_set_value(GTK_RANGE(scale), num_shades);
     gtk_scale_set_digits(GTK_SCALE(scale), 0);
     gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
     gtk_widget_set_margin_bottom(scale, 5);
 
     g_signal_connect(scale, "value-changed", G_CALLBACK(update_num_shades), NULL);
+
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
+}
+
+GtkWidget* create_labeled_red_shades_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2); 
+
+    GtkWidget *label = gtk_label_new("Number of Red values per channel:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
+    gtk_range_set_value(GTK_RANGE(scale), num_shades);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    gtk_widget_set_margin_bottom(scale, 5);
+
+    g_signal_connect(scale, "value-changed", G_CALLBACK(update_red_shades), NULL);
+
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
+}
+
+GtkWidget* create_labeled_green_shades_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2); 
+
+    GtkWidget *label = gtk_label_new("Number of Green values per channel:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
+    gtk_range_set_value(GTK_RANGE(scale), num_shades);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    gtk_widget_set_margin_bottom(scale, 5);
+
+    g_signal_connect(scale, "value-changed", G_CALLBACK(update_green_shades), NULL);
+
+    gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
+
+    return slider_container;
+}
+
+GtkWidget* create_labeled_blue_shades_slider() {
+    GtkWidget *slider_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2); 
+
+    GtkWidget *label = gtk_label_new("Number of Blue values per channel:");
+    gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+
+    GtkWidget *scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 2, 256, 1);
+    gtk_range_set_value(GTK_RANGE(scale), num_shades);
+    gtk_scale_set_digits(GTK_SCALE(scale), 0);
+    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    gtk_widget_set_margin_bottom(scale, 5);
+
+    g_signal_connect(scale, "value-changed", G_CALLBACK(update_blue_shades), NULL);
 
     gtk_box_pack_start(GTK_BOX(slider_container), label, FALSE, FALSE, 2);
     gtk_box_pack_start(GTK_BOX(slider_container), scale, FALSE, FALSE, 2);
@@ -1519,13 +1618,18 @@ int main(int argc, char *argv[]) {
 
     GtkWidget *slider = create_labeled_shades_slider();
     GtkWidget *color_slider = create_labeled_color_slider();
+    GtkWidget *red_slider = create_labeled_red_shades_slider();
+    GtkWidget *green_slider = create_labeled_green_shades_slider();
+    GtkWidget *blue_slider = create_labeled_blue_shades_slider();
     GtkWidget *pixelize_slider = create_pixelize_slider();
 
     gtk_box_pack_start(GTK_BOX(slider_box), drawing_area, TRUE, TRUE, 10);
     gtk_box_pack_start(GTK_BOX(slider_box), pixelize_slider, FALSE, FALSE, 5);
     gtk_box_pack_start(GTK_BOX(slider_box), slider, FALSE, FALSE, 5);
     gtk_box_pack_start(GTK_BOX(slider_box), color_slider, FALSE, FALSE, 5);
-
+    gtk_box_pack_start(GTK_BOX(slider_box), red_slider, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(slider_box), green_slider, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(slider_box), blue_slider, FALSE, FALSE, 5);
     gtk_box_pack_start(GTK_BOX(graph_container), slider_box, TRUE, TRUE, 10);
     gtk_paned_pack2(GTK_PANED(paned), graph_container, TRUE, FALSE);
 
