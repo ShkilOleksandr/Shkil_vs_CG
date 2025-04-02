@@ -149,67 +149,98 @@ gboolean draw_callback(GtkWidget* widget, cairo_t* cr, gpointer) {
     return FALSE;
 }
 
-gboolean on_mouse_click(GtkWidget* widget, GdkEventButton* event, gpointer) {
-    cv::Point pt = map_click_to_image(widget, event->x, event->y);
-    const int threshold = 15;
+bool try_select_circle(cv::Point pt, int threshold) {
+    for (int i = 0; i < circles.size(); ++i) {
+        if (std::abs(cv::norm(pt - circles[i].center) - circles[i].radius) < threshold) {
+            selectedCircleIndex = i;
+            selectedLineIndex = -1;
+            return true;
+        }
+    }
+    return false;
+}
 
-    static cv::Point lineStart;
+void try_delete_circle(cv::Point pt, GtkWidget* widget, int threshold) {
+    auto it = std::find_if(circles.begin(), circles.end(), [&](const Circle& c) {
+        return std::abs(cv::norm(pt - c.center) - c.radius) < threshold;
+    });
+    if (it != circles.end()) {
+        circles.erase(it);
+        redraw_shapes(widget);
+    }
+}
+
+bool try_select_line_endpoint(cv::Point pt, int threshold) {
+    for (int i = 0; i < lines.size(); ++i) {
+        if (cv::norm(pt - lines[i].start) < threshold) {
+            editMode = EditMode::MoveStart;
+            selectedLineIndex = i;
+            return true;
+        } else if (cv::norm(pt - lines[i].end) < threshold) {
+            editMode = EditMode::MoveEnd;
+            selectedLineIndex = i;
+            selectedCircleIndex = -1;
+            return true;
+        }
+    }
+    return false;
+}
+
+void try_delete_line(cv::Point pt, GtkWidget* widget, int threshold) {
+    auto dist_to_segment = [](cv::Point p, cv::Point a, cv::Point b) -> double {
+        cv::Point ab = b - a;
+        double len_sq = ab.dot(ab);
+        if (len_sq == 0) return cv::norm(p - a);
+        double t = std::clamp((p - a).dot(ab) / len_sq, 0.0, 1.0);
+        cv::Point proj = a + t * ab;
+        return cv::norm(p - proj);
+    };
+
+    auto it = std::find_if(lines.begin(), lines.end(), [&](const Line& l) {
+        return dist_to_segment(pt, l.start, l.end) < threshold;
+    });
+    if (it != lines.end()) {
+        lines.erase(it);
+        redraw_shapes(widget);
+    }
+}
+
+void handle_circle_click(cv::Point pt, GdkEventButton* event, GtkWidget* widget, int threshold) {
     static bool movingCircle = false;
 
-    // CIRCLE TOOL
-    if (currentShape == ShapeType::Circle) {
-        if (event->button == 1) {  // Left click
-            if (movingCircle && selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
-                // Second click: move circle
-                circles[selectedCircleIndex].center = pt;
-                movingCircle = false;
-                selectedCircleIndex = -1;
-                redraw_shapes(widget);
+    if (event->button == 1) {
+        if (movingCircle && selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
+            circles[selectedCircleIndex].center = pt;
+            movingCircle = false;
+            selectedCircleIndex = -1;
+            redraw_shapes(widget);
+        } else if (try_select_circle(pt, threshold)) {
+            movingCircle = true;
+        } else {
+            if (!awaitingSecondClick) {
+                tempPoint = pt;
+                awaitingSecondClick = true;
             } else {
-                // First click: try selecting a circle
-                for (int i = 0; i < circles.size(); ++i) {
-                    double dist = std::abs(cv::norm(pt - circles[i].center) - circles[i].radius);
-                    if (dist < threshold) {
-                        selectedCircleIndex = i;
-                        movingCircle = true;
-                        return TRUE;
-                    }
+                int radius = static_cast<int>(cv::norm(pt - tempPoint));
+                if (radius > 0) {
+                    circles.push_back({tempPoint, radius});
                 }
-
-                // No circle selected, treat as new circle drawing
-                if (!awaitingSecondClick) {
-                    tempPoint = pt;
-                    awaitingSecondClick = true;
-                } else {
-                    int radius = static_cast<int>(cv::norm(pt - tempPoint));
-                    if (radius > 0) {
-                        circles.push_back({tempPoint, radius});
-                    }
-                    awaitingSecondClick = false;
-                    redraw_shapes(widget);
-                }
-            }
-        } else if (event->button == 2) { // Middle click: select for scroll-resize
-            for (int i = 0; i < circles.size(); ++i) {
-                if (std::abs(cv::norm(pt - circles[i].center) - circles[i].radius) < threshold) {
-                    selectedCircleIndex = i;
-                    std::cout << "Circle selected with middle click.\n";
-                    return TRUE;
-                }
-            }
-        } else if (event->button == 3) { // Right click: delete
-            auto it = std::find_if(circles.begin(), circles.end(), [&](const Circle& c) {
-                return std::abs(cv::norm(pt - c.center) - c.radius) < threshold;
-            });
-            if (it != circles.end()) {
-                circles.erase(it);
+                awaitingSecondClick = false;
                 redraw_shapes(widget);
             }
         }
-        return TRUE;
+    } else if (event->button == 2) {
+        if (try_select_circle(pt, threshold)) {
+            std::cout << "Circle selected with middle click.\n";
+        }
+    } else if (event->button == 3) {
+        try_delete_circle(pt, widget, threshold);
     }
+}
 
-    // LINE TOOL
+void handle_line_click(cv::Point pt, GdkEventButton* event, GtkWidget* widget, int threshold) {
+    static cv::Point lineStart;
+
     auto dist_to_segment = [](cv::Point p, cv::Point a, cv::Point b) -> double {
         cv::Point ab = b - a;
         double len_sq = ab.dot(ab);
@@ -227,63 +258,76 @@ gboolean on_mouse_click(GtkWidget* widget, GdkEventButton* event, gpointer) {
             editMode = EditMode::None;
             selectedLineIndex = -1;
             redraw_shapes(widget);
+        } else if (try_select_line_endpoint(pt, threshold)) {
+            // selectedLineIndex & editMode are set
         } else {
-            bool found = false;
-            for (int i = 0; i < lines.size(); ++i) {
-                if (cv::norm(pt - lines[i].start) < threshold) {
-                    editMode = EditMode::MoveStart;
-                    selectedLineIndex = i;
-                    found = true;
-                    break;
-                } else if (cv::norm(pt - lines[i].end) < threshold) {
-                    editMode = EditMode::MoveEnd;
-                    selectedLineIndex = i;
-                    found = true;
-                    break;
+            if (!awaitingSecondClick) {
+                lineStart = pt;
+                awaitingSecondClick = true;
+            } else {
+                if (pt != lineStart) {
+                    lines.push_back({lineStart, pt, 1});
                 }
-            }
-            if (!found) {
-                if (!awaitingSecondClick) {
-                    lineStart = pt;
-                    awaitingSecondClick = true;
-                } else {
-                    if (pt != lineStart) {
-                        lines.push_back({lineStart, pt, 1});
-                    }
-                    awaitingSecondClick = false;
-                    redraw_shapes(widget);
-                }
+                awaitingSecondClick = false;
+                redraw_shapes(widget);
             }
         }
-    }
-    else if (event->button == 2) { // Middle click (line selection)
+    } else if (event->button == 2) {
         auto it = std::find_if(lines.begin(), lines.end(), [&](const Line& l) {
             return dist_to_segment(pt, l.start, l.end) < threshold;
         });
 
         if (it != lines.end()) {
             selectedLineIndex = std::distance(lines.begin(), it);
+            selectedCircleIndex = -1;
             std::cout << "Line selected with middle click for potential thickness change.\n";
         }
+    } else if (event->button == 3) {
+        try_delete_line(pt, widget, threshold);
     }
-    else if (event->button == 3) { // Right click (delete line)
-        auto it = std::find_if(lines.begin(), lines.end(), [&](const Line& l) {
-            return dist_to_segment(pt, l.start, l.end) < threshold;
-        });
+}
 
-        if (it != lines.end()) {
-            lines.erase(it);
-            redraw_shapes(widget);
-        }
+gboolean on_mouse_click(GtkWidget* widget, GdkEventButton* event, gpointer) {
+    cv::Point pt = map_click_to_image(widget, event->x, event->y);
+    const int threshold = 15;
+
+    if (currentShape == ShapeType::Circle) {
+        handle_circle_click(pt, event, widget, threshold);
+    } else {
+        handle_line_click(pt, event, widget, threshold);
     }
 
     return TRUE;
 }
 
+bool adjust_line_thickness(double delta) {
+    if (selectedLineIndex >= 0 && selectedLineIndex < lines.size()) {
+        auto& line = lines[selectedLineIndex];
+        if (delta < 0)
+            line.thickness = std::min(50, line.thickness + 1);
+        else
+            line.thickness = std::max(1, line.thickness - 1);
+        std::cout << "Line thickness changed to: " << line.thickness << "\n";
+        return true;
+    }
+    return false;
+}
 
-gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
+bool adjust_circle_radius(double delta) {
+    if (selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
+        auto& circle = circles[selectedCircleIndex];
+        if (delta < 0)
+            circle.radius = std::min(300, circle.radius + 5);
+        else
+            circle.radius = std::max(5, circle.radius - 5);
+        std::cout << "Circle radius changed to: " << circle.radius << "\n";
+        return true;
+    }
+    return false;
+}
+
+double extract_scroll_delta(GdkEventScroll* event) {
     double delta = 0;
-
     if (event->direction == GDK_SCROLL_SMOOTH) {
         gdouble dx = 0, dy = 0;
         gdk_event_get_scroll_deltas(reinterpret_cast<GdkEvent*>(event), &dx, &dy);
@@ -293,30 +337,19 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
     } else if (event->direction == GDK_SCROLL_DOWN) {
         delta = 1;
     }
+    return delta;
+}
 
+gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
+    double delta = extract_scroll_delta(event);
     if (delta == 0) return TRUE;
 
     bool changed = false;
 
-    // Adjust line thickness
-    if (selectedLineIndex >= 0 && selectedLineIndex < lines.size()) {
-        auto& line = lines[selectedLineIndex];
-        if (delta < 0)
-            line.thickness = std::min(50, line.thickness + 1);
-        else
-            line.thickness = std::max(1, line.thickness - 1);
-        std::cout << "Line thickness changed to: " << line.thickness << "\n";
+    // Prioritize circle editing
+    if (adjust_circle_radius(delta)) {
         changed = true;
-    }
-
-    // Adjust circle radius
-    if (selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
-        auto& circle = circles[selectedCircleIndex];
-        if (delta < 0)
-            circle.radius = std::min(300, circle.radius + 5);
-        else
-            circle.radius = std::max(5, circle.radius - 5);
-        std::cout << "Circle radius changed to: " << circle.radius << "\n";
+    } else if (adjust_line_thickness(delta)) {
         changed = true;
     }
 
@@ -325,6 +358,7 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
 
     return TRUE;
 }
+
 
 
 void on_shape_selected(GtkComboBoxText* combo, gpointer) {
