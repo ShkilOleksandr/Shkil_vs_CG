@@ -4,7 +4,7 @@
 #include <vector>
 #include <cmath>
 
-enum class ShapeType { Line, Circle };
+enum class ShapeType { Line, Circle, Polygon }; // Added Polygon
 ShapeType currentShape = ShapeType::Line;
 GtkWidget* shape_menu;
 
@@ -18,10 +18,17 @@ struct Circle {
     int radius;
 };
 
+struct Polygon {
+    std::vector<cv::Point> vertices;
+    int thickness;
+};
+
 enum class EditMode { None, MoveStart, MoveEnd };
 
 std::vector<Line> lines;
 std::vector<Circle> circles;
+std::vector<Polygon> polygons; // New vector
+
 cv::Mat image;
 GtkWidget* drawing_area;
 cv::Point tempPoint;
@@ -31,6 +38,9 @@ double current_scale = 1.0;
 EditMode editMode = EditMode::None;
 int selectedLineIndex = -1;
 int selectedCircleIndex = -1;
+int selectedPolygonIndex = -1;
+
+std::vector<cv::Point> currentPolygonVertices; // in-progress polygon
 
 void drawCircleMidpoint(cv::Mat& img, cv::Point center, int radius, const cv::Vec3b& color) {
     int x = 0, y = radius;
@@ -88,7 +98,37 @@ void drawLineDDA(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& colo
         x += x_inc;
         y += y_inc;
     }
+
 }
+
+void draw_in_progress_polygon(cv::Mat& img) {
+    if (currentPolygonVertices.size() < 2) return;
+    for (size_t i = 0; i < currentPolygonVertices.size() - 1; ++i) {
+        drawLineDDA(img, currentPolygonVertices[i], currentPolygonVertices[i + 1], cv::Vec3b(200, 200, 0), 1);
+    }
+}
+
+void drawPolygon(cv::Mat& img, const Polygon& poly, const cv::Vec3b& color) {
+    if (poly.vertices.size() < 2) return;
+    for (size_t i = 0; i < poly.vertices.size(); ++i) {
+        cv::Point p1 = poly.vertices[i];
+        cv::Point p2 = poly.vertices[(i + 1) % poly.vertices.size()];
+        drawLineDDA(img, p1, p2, color, poly.thickness);
+    }
+}
+
+void redraw_shapes(GtkWidget* widget) {
+    image.setTo(cv::Scalar(255, 255, 255));
+    for (const auto& line : lines)
+        drawLineDDA(image, line.start, line.end, cv::Vec3b(0, 0, 255), line.thickness);
+    for (const auto& circle : circles)
+        drawCircleMidpoint(image, circle.center, circle.radius, cv::Vec3b(0, 255, 0));
+    for (const auto& poly : polygons)
+        drawPolygon(image, poly, cv::Vec3b(255, 0, 0));
+    draw_in_progress_polygon(image);
+    gtk_widget_queue_draw(widget);
+}
+
 
 cv::Point map_click_to_image(GtkWidget* widget, double click_x, double click_y) {
     int w = gtk_widget_get_allocated_width(widget);
@@ -111,14 +151,45 @@ cv::Point map_click_to_image(GtkWidget* widget, double click_x, double click_y) 
     };
 }
 
-void redraw_shapes(GtkWidget* widget) {
-    image.setTo(cv::Scalar(255, 255, 255));
-    for (const auto& line : lines)
-        drawLineDDA(image, line.start, line.end, cv::Vec3b(0, 0, 255), line.thickness);
-    for (const auto& circle : circles)
-        drawCircleMidpoint(image, circle.center, circle.radius, cv::Vec3b(0, 255, 0));
-    gtk_widget_queue_draw(widget);
+
+void try_complete_polygon(cv::Point pt, GtkWidget* widget) {
+    const int closeThreshold = 10;
+    if (!currentPolygonVertices.empty() && cv::norm(pt - currentPolygonVertices[0]) < closeThreshold && currentPolygonVertices.size() >= 3) {
+        polygons.push_back({currentPolygonVertices, 1});
+        currentPolygonVertices.clear();
+        redraw_shapes(widget);
+    } else {
+        currentPolygonVertices.push_back(pt);
+        redraw_shapes(widget);
+    }
 }
+
+void try_delete_polygon(cv::Point pt, GtkWidget* widget) {
+    const int threshold = 10;
+    auto dist_to_segment = [](cv::Point p, cv::Point a, cv::Point b) -> double {
+        cv::Point ab = b - a;
+        double len_sq = ab.dot(ab);
+        if (len_sq == 0) return cv::norm(p - a);
+        double t = std::clamp((p - a).dot(ab) / len_sq, 0.0, 1.0);
+        cv::Point proj = a + t * ab;
+        return cv::norm(p - proj);
+    };
+    for (auto it = polygons.begin(); it != polygons.end(); ++it) {
+        const auto& vertices = it->vertices;
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            cv::Point a = vertices[i];
+            cv::Point b = vertices[(i + 1) % vertices.size()];
+            if (dist_to_segment(pt, a, b) < threshold) {
+                polygons.erase(it);
+                redraw_shapes(widget);
+                return;
+            }
+        }
+    }
+}
+
+
+
 
 gboolean draw_callback(GtkWidget* widget, cairo_t* cr, gpointer) {
     cv::Mat rgb_image;
@@ -291,10 +362,20 @@ gboolean on_mouse_click(GtkWidget* widget, GdkEventButton* event, gpointer) {
     cv::Point pt = map_click_to_image(widget, event->x, event->y);
     const int threshold = 15;
 
-    if (currentShape == ShapeType::Circle) {
-        handle_circle_click(pt, event, widget, threshold);
-    } else {
-        handle_line_click(pt, event, widget, threshold);
+    switch (currentShape) {
+        case ShapeType::Polygon:
+            if (event->button == 1) {
+                try_complete_polygon(pt, widget);
+            } else if (event->button == 3) {
+                try_delete_polygon(pt, widget);
+            }
+            break;
+        case ShapeType::Circle:
+            handle_circle_click(pt, event, widget, threshold);
+            break;
+        case ShapeType::Line:
+            handle_line_click(pt, event, widget, threshold);
+            break;
     }
 
     return TRUE;
@@ -375,13 +456,14 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
 
     GtkWidget* line_item = gtk_menu_item_new_with_label("Line");
     GtkWidget* circle_item = gtk_menu_item_new_with_label("Circle");
+    GtkWidget* polygon_item = gtk_menu_item_new_with_label("Polygon");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), line_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), circle_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), polygon_item);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_menu_bar), shape_menu_root);
 
-    // Callbacks for selection
     g_signal_connect(line_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Line;
         std::cout << "Shape changed to: Line" << std::endl;
@@ -390,6 +472,11 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     g_signal_connect(circle_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Circle;
         std::cout << "Shape changed to: Circle" << std::endl;
+    }), NULL);
+
+    g_signal_connect(polygon_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
+        currentShape = ShapeType::Polygon;
+        std::cout << "Shape changed to: Polygon" << std::endl;
     }), NULL);
 
     return shape_menu_bar;
