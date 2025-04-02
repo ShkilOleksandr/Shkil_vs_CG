@@ -40,6 +40,13 @@ int selectedLineIndex = -1;
 int selectedCircleIndex = -1;
 int selectedPolygonIndex = -1;
 
+enum class PolygonMoveMode { None, MoveVertex, MoveEdge, MoveWhole };
+PolygonMoveMode polygonMoveMode = PolygonMoveMode::None;
+static cv::Point storedClick;
+static bool waitingForSecondClick = false;
+
+int selectedVertexIndex = -1;  // used for vertex or edge
+
 std::vector<cv::Point> currentPolygonVertices; // in-progress polygon
 
 void drawCircleMidpoint(cv::Mat& img, cv::Point center, int radius, const cv::Vec3b& color) {
@@ -129,6 +136,15 @@ void redraw_shapes(GtkWidget* widget) {
     gtk_widget_queue_draw(widget);
 }
 
+double distance_to_segment(cv::Point p, cv::Point a, cv::Point b) {
+    cv::Point ab = b - a;
+    double len_sq = ab.dot(ab);
+    if (len_sq == 0) return cv::norm(p - a);
+    double t = std::clamp((p - a).dot(ab) / len_sq, 0.0, 1.0);
+    cv::Point proj = a + t * ab;
+    return cv::norm(p - proj);
+}
+
 
 cv::Point map_click_to_image(GtkWidget* widget, double click_x, double click_y) {
     int w = gtk_widget_get_allocated_width(widget);
@@ -188,7 +204,152 @@ void try_delete_polygon(cv::Point pt, GtkWidget* widget) {
     }
 }
 
+void try_select_polygon(cv::Point pt) {
+    const int threshold = 10;
+    auto dist_to_segment = [](cv::Point p, cv::Point a, cv::Point b) -> double {
+        cv::Point ab = b - a;
+        double len_sq = ab.dot(ab);
+        if (len_sq == 0) return cv::norm(p - a);
+        double t = std::clamp((p - a).dot(ab) / len_sq, 0.0, 1.0);
+        cv::Point proj = a + t * ab;
+        return cv::norm(p - proj);
+    };
+    for (int i = 0; i < polygons.size(); ++i) {
+        const auto& vertices = polygons[i].vertices;
+        for (size_t j = 0; j < vertices.size(); ++j) {
+            cv::Point a = vertices[j];
+            cv::Point b = vertices[(j + 1) % vertices.size()];
+            if (dist_to_segment(pt, a, b) < threshold) {
+                selectedPolygonIndex = i;
+                std::cout << "Polygon selected with middle click.\n";
+                return;
+            }
+        }
+    }
+    selectedPolygonIndex = -1;
+}
 
+bool is_point_near_vertex(const std::vector<cv::Point>& vertices, cv::Point pt, int& outIndex, int threshold = 10) {
+    for (int i = 0; i < vertices.size(); ++i) {
+        if (cv::norm(pt - vertices[i]) < threshold) {
+            outIndex = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_point_near_edge_center(const std::vector<cv::Point>& vertices, cv::Point pt, int& outEdgeIndex, int threshold = 10) {
+    for (int i = 0; i < vertices.size(); ++i) {
+        cv::Point a = vertices[i];
+        cv::Point b = vertices[(i + 1) % vertices.size()];
+        cv::Point mid = (a + b) / 2;
+        if (cv::norm(pt - mid) < threshold) {
+            outEdgeIndex = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_point_inside_polygon(const std::vector<cv::Point>& vertices, cv::Point pt) {
+    return cv::pointPolygonTest(vertices, pt, false) >= 0;
+}
+
+void move_polygon_vertex(Polygon& poly, int vertexIndex, cv::Point newPos) {
+    if (vertexIndex >= 0 && vertexIndex < poly.vertices.size()) {
+        poly.vertices[vertexIndex] = newPos;
+    }
+}
+
+void move_polygon_edge(Polygon& poly, int edgeStartIndex, cv::Point newMidpoint) {
+    if (poly.vertices.size() < 2) return;
+    cv::Point a = poly.vertices[edgeStartIndex];
+    cv::Point b = poly.vertices[(edgeStartIndex + 1) % poly.vertices.size()];
+    cv::Point currentMid = (a + b) / 2;
+    cv::Point offset = newMidpoint - currentMid;
+    poly.vertices[edgeStartIndex] += offset;
+    poly.vertices[(edgeStartIndex + 1) % poly.vertices.size()] += offset;
+}
+
+void move_entire_polygon(Polygon& poly, cv::Point newPos) {
+    cv::Point offset = newPos - storedClick;
+    for (auto& v : poly.vertices)
+        v += offset;
+}
+
+void handle_polygon_movement(cv::Point pt, GtkWidget* widget) {
+    if (selectedPolygonIndex < 0 || selectedPolygonIndex >= polygons.size()) return;
+
+    Polygon& poly = polygons[selectedPolygonIndex];
+
+    switch (polygonMoveMode) {
+        case PolygonMoveMode::MoveVertex:
+            move_polygon_vertex(poly, selectedVertexIndex, pt);
+            break;
+        case PolygonMoveMode::MoveEdge:
+            move_polygon_edge(poly, selectedVertexIndex, pt);
+            break;
+        case PolygonMoveMode::MoveWhole:
+            move_entire_polygon(poly, pt);
+            break;
+        default:
+            return;
+    }
+
+    // Reset state after move
+    polygonMoveMode = PolygonMoveMode::None;
+    selectedPolygonIndex = -1;
+    selectedVertexIndex = -1;
+    waitingForSecondClick = false;
+    redraw_shapes(widget);
+}
+
+void handle_polygon_selection(cv::Point pt, GdkEventButton* event, GtkWidget* widget) {
+    const int threshold = 10;
+
+    for (int i = 0; i < polygons.size(); ++i) {
+        const auto& poly = polygons[i];
+
+        if ((event->state & GDK_CONTROL_MASK) && is_point_inside_polygon(poly.vertices, pt)) {
+            polygonMoveMode = PolygonMoveMode::MoveWhole;
+            selectedPolygonIndex = i;
+            storedClick = pt;
+            waitingForSecondClick = true;
+            return;
+        }
+
+        int vertexIndex = -1;
+        if (is_point_near_vertex(poly.vertices, pt, vertexIndex, threshold)) {
+            polygonMoveMode = PolygonMoveMode::MoveVertex;
+            selectedPolygonIndex = i;
+            selectedVertexIndex = vertexIndex;
+            waitingForSecondClick = true;
+            return;
+        }
+
+        int edgeIndex = -1;
+        if (is_point_near_edge_center(poly.vertices, pt, edgeIndex, threshold)) {
+            polygonMoveMode = PolygonMoveMode::MoveEdge;
+            selectedPolygonIndex = i;
+            selectedVertexIndex = edgeIndex;
+            waitingForSecondClick = true;
+            return;
+        }
+    }
+
+    // If nothing selected, assume vertex creation
+    try_complete_polygon(pt, widget);
+
+}
+
+void handle_polygon_click(cv::Point pt, GdkEventButton* event, GtkWidget* widget) {
+    if (waitingForSecondClick) {
+        handle_polygon_movement(pt, widget);
+    } else {
+        handle_polygon_selection(pt, event, widget);
+    }
+}
 
 
 gboolean draw_callback(GtkWidget* widget, cairo_t* cr, gpointer) {
@@ -365,7 +526,9 @@ gboolean on_mouse_click(GtkWidget* widget, GdkEventButton* event, gpointer) {
     switch (currentShape) {
         case ShapeType::Polygon:
             if (event->button == 1) {
-                try_complete_polygon(pt, widget);
+                handle_polygon_click(pt, event, widget);
+            } else if (event->button == 2) {
+                try_select_polygon(pt);
             } else if (event->button == 3) {
                 try_delete_polygon(pt, widget);
             }
@@ -427,10 +590,36 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
 
     bool changed = false;
 
-    // Prioritize circle editing
-    if (adjust_circle_radius(delta)) {
+    // Polygon thickness
+    if (selectedPolygonIndex >= 0 && selectedPolygonIndex < polygons.size()) {
+        auto& poly = polygons[selectedPolygonIndex];
+        if (delta < 0)
+            poly.thickness = std::min(50, poly.thickness + 1);
+        else
+            poly.thickness = std::max(1, poly.thickness - 1);
+        std::cout << "Polygon thickness changed to: " << poly.thickness << "\n";
         changed = true;
-    } else if (adjust_line_thickness(delta)) {
+    }
+
+    // Circle radius
+    if (selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
+        auto& circle = circles[selectedCircleIndex];
+        if (delta < 0)
+            circle.radius = std::min(300, circle.radius + 5);
+        else
+            circle.radius = std::max(5, circle.radius - 5);
+        std::cout << "Circle radius changed to: " << circle.radius << "\n";
+        changed = true;
+    }
+
+    // Line thickness
+    if (selectedLineIndex >= 0 && selectedLineIndex < lines.size()) {
+        auto& line = lines[selectedLineIndex];
+        if (delta < 0)
+            line.thickness = std::min(50, line.thickness + 1);
+        else
+            line.thickness = std::max(1, line.thickness - 1);
+        std::cout << "Line thickness changed to: " << line.thickness << "\n";
         changed = true;
     }
 
