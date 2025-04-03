@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <fstream>
 
 enum class ShapeType { Line, Circle, Polygon }; // Added Polygon
 ShapeType currentShape = ShapeType::Line;
@@ -104,9 +105,6 @@ float coverage(float thickness, float distance) {
     return fade * fade;  // makes outer pixels dimmer
 }
 
-
-
-
 void plot(cv::Mat& img, int x, int y, float brightness, const cv::Vec3b& color) {
     if (x >= 0 && x < img.cols && y >= 0 && y < img.rows) {
         cv::Vec3b& pixel = img.at<cv::Vec3b>(y, x);
@@ -168,10 +166,6 @@ void drawLineGuptaSproull(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Ve
         y += gradient;
     }
 }
-
-
-
-
 
 void drawLineDDA(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& color, int thickness = 1) {
     
@@ -249,7 +243,6 @@ double distance_to_segment(cv::Point p, cv::Point a, cv::Point b) {
     return cv::norm(p - proj);
 }
 
-
 cv::Point map_click_to_image(GtkWidget* widget, double click_x, double click_y) {
     int w = gtk_widget_get_allocated_width(widget);
     int h = gtk_widget_get_allocated_height(widget);
@@ -270,7 +263,6 @@ cv::Point map_click_to_image(GtkWidget* widget, double click_x, double click_y) 
         std::clamp(static_cast<int>(img_y), 0, image.rows - 1)
     };
 }
-
 
 void try_complete_polygon(cv::Point pt, GtkWidget* widget) {
     const int closeThreshold = 10;
@@ -456,7 +448,6 @@ void handle_polygon_click(cv::Point pt, GdkEventButton* event, GtkWidget* widget
         handle_polygon_selection(pt, event, widget);
     }
 }
-
 
 gboolean draw_callback(GtkWidget* widget, cairo_t* cr, gpointer) {
     cv::Mat rgb_image;
@@ -708,7 +699,7 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
     }
 
     // Circle radius
-    if (selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
+    else if (selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
         auto& circle = circles[selectedCircleIndex];
         if (delta < 0)
             circle.radius = std::min(300, circle.radius + 5);
@@ -719,7 +710,7 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
     }
 
     // Line thickness
-    if (selectedLineIndex >= 0 && selectedLineIndex < lines.size()) {
+    else if (selectedLineIndex >= 0 && selectedLineIndex < lines.size()) {
         auto& line = lines[selectedLineIndex];
         if (delta < 0)
             line.thickness = std::min(50, line.thickness + 1);
@@ -735,8 +726,6 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer) {
     return TRUE;
 }
 
-
-
 void on_shape_selected(GtkComboBoxText* combo, gpointer) {
     const gchar* selected = gtk_combo_box_text_get_active_text(combo);
     if (g_strcmp0(selected, "Line") == 0) currentShape = ShapeType::Line;
@@ -744,8 +733,136 @@ void on_shape_selected(GtkComboBoxText* combo, gpointer) {
     std::cout << "Shape changed to: " << selected << std::endl;
 }
 
+void clear_all_shapes(GtkWidget* widget) {
+    lines.clear();
+    circles.clear();
+    polygons.clear();
+    currentPolygonVertices.clear();
+    selectedLineIndex = -1;
+    selectedCircleIndex = -1;
+    selectedPolygonIndex = -1;
+    awaitingSecondClick = false;
+    polygonMoveMode = PolygonMoveMode::None;
+    editMode = EditMode::None;
+
+    std::cout << "Canvas cleared.\n";
+    redraw_shapes(widget);
+}
+
+
+
+void save_shapes_to_file(GtkWidget* parent) {
+    GtkWidget* dialog = gtk_file_chooser_dialog_new("Save Shapes",
+        GTK_WINDOW(parent),
+        GTK_FILE_CHOOSER_ACTION_SAVE,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Save", GTK_RESPONSE_ACCEPT,
+        NULL);
+
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), "shapes.vec");
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        std::ofstream out(filename);
+        if (!out) {
+            std::cerr << "Failed to open file for saving.\n";
+            g_free(filename);
+            gtk_widget_destroy(dialog);
+            return;
+        }
+
+        for (const auto& line : lines)
+            out << "LINE " << line.start.x << " " << line.start.y << " "
+                        << line.end.x << " " << line.end.y << " "
+                        << line.thickness << "\n";
+
+        for (const auto& circle : circles)
+            out << "CIRCLE " << circle.center.x << " " << circle.center.y << " "
+                           << circle.radius << "\n";
+
+        for (const auto& poly : polygons) {
+            out << "POLYGON " << poly.thickness << " " << poly.vertices.size();
+            for (const auto& v : poly.vertices)
+                out << " " << v.x << " " << v.y;
+            out << "\n";
+        }
+
+        out.close();
+        g_free(filename);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
+void load_shapes_from_file(GtkWidget* parent) {
+    GtkWidget* dialog = gtk_file_chooser_dialog_new("Load Shapes",
+        GTK_WINDOW(parent),
+        GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Open", GTK_RESPONSE_ACCEPT,
+        NULL);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        std::ifstream in(filename);
+        if (!in) {
+            std::cerr << "Failed to open file for loading.\n";
+            g_free(filename);
+            gtk_widget_destroy(dialog);
+            return;
+        }
+
+        // Clear current shapes
+        lines.clear();
+        circles.clear();
+        polygons.clear();
+        currentPolygonVertices.clear();
+
+        std::string type;
+        while (in >> type) {
+            if (type == "LINE") {
+                Line l;
+                in >> l.start.x >> l.start.y >> l.end.x >> l.end.y >> l.thickness;
+                lines.push_back(l);
+            } else if (type == "CIRCLE") {
+                Circle c;
+                in >> c.center.x >> c.center.y >> c.radius;
+                circles.push_back(c);
+            } else if (type == "POLYGON") {
+                Polygon p;
+                int count;
+                in >> p.thickness >> count;
+                for (int i = 0; i < count; ++i) {
+                    cv::Point pt;
+                    in >> pt.x >> pt.y;
+                    p.vertices.push_back(pt);
+                }
+                polygons.push_back(p);
+            }
+        }
+
+        in.close();
+        redraw_shapes(parent);
+        g_free(filename);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
 GtkWidget* create_shape_menu(GtkWidget* window) {
-    GtkWidget* shape_menu_bar = gtk_menu_bar_new();
+    GtkWidget* menu_bar = gtk_menu_bar_new();
+
+    // === FILE MENU ===
+    GtkWidget* file_menu_root = gtk_menu_item_new_with_label("File");
+    GtkWidget* file_submenu = gtk_menu_new();
+    GtkWidget* clear_item = gtk_menu_item_new_with_label("Clear");
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), clear_item);
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_menu_root), file_submenu);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_root);
+
+    // === SHAPES MENU ===
     GtkWidget* shape_menu_root = gtk_menu_item_new_with_label("Shapes");
     GtkWidget* shape_submenu = gtk_menu_new();
 
@@ -753,26 +870,39 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     GtkWidget* circle_item = gtk_menu_item_new_with_label("Circle");
     GtkWidget* polygon_item = gtk_menu_item_new_with_label("Polygon");
     GtkWidget* aa_toggle_item = gtk_check_menu_item_new_with_label("Enable Anti-Aliasing");
+    GtkWidget* save_item = gtk_menu_item_new_with_label("Save");
+    GtkWidget* load_item = gtk_menu_item_new_with_label("Load");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), line_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), circle_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), polygon_item);
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
-    gtk_menu_shell_append(GTK_MENU_SHELL(shape_menu_bar), shape_menu_root);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), aa_toggle_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), save_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), load_item);
+
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), shape_menu_root);
+
+    // === SIGNALS ===
 
     g_signal_connect(line_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Line;
+        selectedCircleIndex = -1;
+        selectedPolygonIndex = -1;
         std::cout << "Shape changed to: Line" << std::endl;
     }), NULL);
 
     g_signal_connect(circle_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Circle;
+        selectedLineIndex = -1;
+        selectedPolygonIndex = -1;
         std::cout << "Shape changed to: Circle" << std::endl;
     }), NULL);
 
     g_signal_connect(polygon_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Polygon;
+        selectedLineIndex = -1;
+        selectedPolygonIndex = -1;
         std::cout << "Shape changed to: Polygon" << std::endl;
     }), NULL);
 
@@ -782,10 +912,21 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
         redraw_shapes(drawing_area);
     }), NULL);
 
-    return shape_menu_bar;
+    g_signal_connect(clear_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
+        clear_all_shapes(drawing_area);
+    }), NULL);
+
+    g_signal_connect(save_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
+        save_shapes_to_file(gtk_widget_get_toplevel(drawing_area));
+    }), NULL);
+    
+    g_signal_connect(load_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
+        load_shapes_from_file(gtk_widget_get_toplevel(drawing_area));
+    }), NULL);
+    
+
+    return menu_bar;
 }
-
-
 
 int main(int argc, char* argv[]) {
     gtk_init(&argc, &argv);
