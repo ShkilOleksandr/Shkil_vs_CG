@@ -12,17 +12,21 @@ GtkWidget* shape_menu;
 struct Line {
     cv::Point start, end;
     int thickness;
+    cv::Vec3b color = {0, 0, 255}; // default red
 };
 
 struct Circle {
     cv::Point center;
     int radius;
+    cv::Vec3b color = {0, 255, 0}; // default green
 };
 
 struct Polygon {
     std::vector<cv::Point> vertices;
     int thickness;
+    cv::Vec3b color = {255, 0, 0}; // default blue
 };
+
 
 enum class EditMode { None, MoveStart, MoveEnd };
 
@@ -225,11 +229,12 @@ void drawPolygon(cv::Mat& img, const Polygon& poly, const cv::Vec3b& color) {
 void redraw_shapes(GtkWidget* widget) {
     image.setTo(cv::Scalar(255, 255, 255));
     for (const auto& line : lines)
-        drawLineDDA(image, line.start, line.end, cv::Vec3b(0, 0, 255), line.thickness);
+        drawLineDDA(image, line.start, line.end, line.color, line.thickness);
     for (const auto& circle : circles)
-        drawCircleMidpoint(image, circle.center, circle.radius, cv::Vec3b(0, 255, 0));
+        drawCircleMidpoint(image, circle.center, circle.radius, circle.color);
     for (const auto& poly : polygons)
-        drawPolygon(image, poly, cv::Vec3b(255, 0, 0));
+        drawPolygon(image, poly, poly.color);
+
     draw_in_progress_polygon(image);
     gtk_widget_queue_draw(widget);
 }
@@ -749,6 +754,37 @@ void clear_all_shapes(GtkWidget* widget) {
     redraw_shapes(widget);
 }
 
+cv::Vec3b open_color_chooser(GtkWidget* parent) {
+    GtkWidget* dialog = gtk_color_chooser_dialog_new("Choose Color", GTK_WINDOW(parent));
+    cv::Vec3b result{255, 255, 255}; // fallback
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
+        GdkRGBA gdk_color;
+        gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(dialog), &gdk_color);
+        result = {
+            static_cast<uchar>(gdk_color.blue * 255),
+            static_cast<uchar>(gdk_color.green * 255),
+            static_cast<uchar>(gdk_color.red * 255)
+        };
+    }
+
+    gtk_widget_destroy(dialog);
+    return result;
+}
+
+void change_selected_shape_color(GtkWidget* parent) {
+    cv::Vec3b newColor = open_color_chooser(parent);
+
+    if (selectedLineIndex >= 0 && selectedLineIndex < lines.size()) {
+        lines[selectedLineIndex].color = newColor;
+    } else if (selectedCircleIndex >= 0 && selectedCircleIndex < circles.size()) {
+        circles[selectedCircleIndex].color = newColor;
+    } else if (selectedPolygonIndex >= 0 && selectedPolygonIndex < polygons.size()) {
+        polygons[selectedPolygonIndex].color = newColor;
+    }
+
+    redraw_shapes(parent);
+}
 
 
 void save_shapes_to_file(GtkWidget* parent) {
@@ -856,9 +892,17 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     // === FILE MENU ===
     GtkWidget* file_menu_root = gtk_menu_item_new_with_label("File");
     GtkWidget* file_submenu = gtk_menu_new();
+
     GtkWidget* clear_item = gtk_menu_item_new_with_label("Clear");
+    GtkWidget* save_item = gtk_menu_item_new_with_label("Save");
+    GtkWidget* load_item = gtk_menu_item_new_with_label("Load");
+    GtkWidget* color_item = gtk_menu_item_new_with_label("Change Color");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), clear_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), save_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), load_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), color_item);
+
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_menu_root), file_submenu);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_menu_root);
 
@@ -870,20 +914,16 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     GtkWidget* circle_item = gtk_menu_item_new_with_label("Circle");
     GtkWidget* polygon_item = gtk_menu_item_new_with_label("Polygon");
     GtkWidget* aa_toggle_item = gtk_check_menu_item_new_with_label("Enable Anti-Aliasing");
-    GtkWidget* save_item = gtk_menu_item_new_with_label("Save");
-    GtkWidget* load_item = gtk_menu_item_new_with_label("Load");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), line_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), circle_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), polygon_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), aa_toggle_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), save_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(file_submenu), load_item);
 
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), shape_menu_root);
 
-    // === SIGNALS ===
+    // === SIGNAL CONNECTIONS ===
 
     g_signal_connect(line_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Line;
@@ -902,7 +942,7 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     g_signal_connect(polygon_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Polygon;
         selectedLineIndex = -1;
-        selectedPolygonIndex = -1;
+        selectedCircleIndex = -1;
         std::cout << "Shape changed to: Polygon" << std::endl;
     }), NULL);
 
@@ -916,17 +956,24 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
         clear_all_shapes(drawing_area);
     }), NULL);
 
-    g_signal_connect(save_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
-        save_shapes_to_file(gtk_widget_get_toplevel(drawing_area));
-    }), NULL);
-    
-    g_signal_connect(load_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
-        load_shapes_from_file(gtk_widget_get_toplevel(drawing_area));
-    }), NULL);
-    
+    g_signal_connect(save_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer user_data) {
+        GtkWidget* win = GTK_WIDGET(user_data);
+        save_shapes_to_file(win);
+    }), window);
+
+    g_signal_connect(load_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer user_data) {
+        GtkWidget* win = GTK_WIDGET(user_data);
+        load_shapes_from_file(win);
+    }), window);
+
+    g_signal_connect(color_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer user_data) {
+        GtkWidget* win = GTK_WIDGET(user_data);
+        change_selected_shape_color(win);
+    }), window);
 
     return menu_bar;
 }
+
 
 int main(int argc, char* argv[]) {
     gtk_init(&argc, &argv);
