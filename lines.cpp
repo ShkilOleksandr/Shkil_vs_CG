@@ -104,72 +104,110 @@ cv::Vec3b lerp(const cv::Vec3b& a, const cv::Vec3b& b, float t) {
 }
 
 float coverage(float thickness, float distance) {
-    float half = thickness / 2.0f;
-    float fade = std::max(0.0f, 1.0f - distance / half);
-    return fade * fade;  // makes outer pixels dimmer
+    float radius = thickness / 2.0f;
+    float t = distance / radius;
+    return std::exp(-t * t * 2.0f);  // like Gaussian blur
 }
 
-void plot(cv::Mat& img, int x, int y, float brightness, const cv::Vec3b& color) {
+
+void plot(cv::Mat& img, int x, int y, float alpha, const cv::Vec3b& color) {
     if (x >= 0 && x < img.cols && y >= 0 && y < img.rows) {
         cv::Vec3b& pixel = img.at<cv::Vec3b>(y, x);
-        pixel = lerp(pixel, color, brightness);
+        for (int i = 0; i < 3; ++i) {
+            int blended = static_cast<int>(pixel[i] * (1.0f - alpha) + color[i] * alpha + 0.5f);
+            pixel[i] = static_cast<uchar>(std::clamp(blended, 0, 255));
+        }
     }
 }
 
-void drawLineGuptaSproull(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& color, float thickness = 1.0f) {
-    bool steep = std::abs(p2.y - p1.y) > std::abs(p2.x - p1.x);
-    
-    if (steep) {
-        std::swap(p1.x, p1.y);
-        std::swap(p2.x, p2.y);
-    }
-    if (p1.x > p2.x) std::swap(p1, p2);
 
-    int dx = p2.x - p1.x;
-    int dy = p2.y - p1.y;
 
-    float gradient = (dx == 0) ? 1.0f : dy / static_cast<float>(dx);
-    float length = std::sqrt(dx * dx + dy * dy);
-    if (length == 0) return;
-
-    float invLength = 1.0f / length;
-    float normal_x = steep ? -1 : gradient;
-    float normal_y = steep ? gradient : 1;
-    float normal_len = std::sqrt(normal_x * normal_x + normal_y * normal_y);
-    normal_x /= normal_len;
-    normal_y /= normal_len;
-
-    auto intensify = [&](float fx, float fy, float dist) {
-        float cov = coverage(thickness, std::abs(dist));
-        if (cov > 0) {
-            int ix = static_cast<int>(std::floor(fx + 0.5f));
-            int iy = static_cast<int>(std::floor(fy + 0.5f));
-            if (steep)
-                plot(img, iy, ix, cov, color); // reverse
-            else
-                plot(img, ix, iy, cov, color);
-        }
+void drawLineGuptaSproull(cv::Mat& img, cv::Point p0, cv::Point p1, const cv::Vec3b& color, float thickness = 1.0f) {
+    auto plotAA = [&](int x, int y, float d) {
+        float alpha = coverage(thickness, d);
+        if (alpha > 0.0f) plot(img, x, y, alpha, color);
     };
 
-    float x = static_cast<float>(p1.x);
-    float y = static_cast<float>(p1.y);
+    bool steep = std::abs(p1.y - p0.y) > std::abs(p1.x - p0.x);
+    if (steep) {
+        std::swap(p0.x, p0.y);
+        std::swap(p1.x, p1.y);
+    }
+    if (p0.x > p1.x)
+        std::swap(p0, p1);
 
-    for (int i = 0; i <= dx; ++i) {
-        // Central pixel
-        intensify(x, y, 0);
+    int dx = p1.x - p0.x;
+    int dy = p1.y - p0.y;
 
-        // Thickness simulation: perpendicular to line
-        for (int j = 1; j <= thickness; ++j) {
-            float offset_x = normal_x * j;
-            float offset_y = normal_y * j;
-            intensify(x + offset_x, y + offset_y, j);
-            intensify(x - offset_x, y - offset_y, j);
+    int ystep = (p1.y > p0.y) ? 1 : -1;
+    float gradient = (dx == 0) ? 0.0f : static_cast<float>(dy) / dx;
+    float intery = static_cast<float>(p0.y) + gradient;
+
+    float radius = thickness / 2.0f;
+    int coverageRange = std::ceil(radius) + 1;
+
+    int x_start = p0.x + 1;
+    int x_end = p1.x - 1;
+
+    // Start pixel
+    if (steep) {
+        plotAA(p0.y, p0.x, 0.0f);
+        for (int k = 1; k <= coverageRange; ++k) {
+            plotAA(p0.y + k * ystep, p0.x, static_cast<float>(k));
+            plotAA(p0.y - k * ystep, p0.x, static_cast<float>(k));
         }
+    } else {
+        plotAA(p0.x, p0.y, 0.0f);
+        for (int k = 1; k <= coverageRange; ++k) {
+            plotAA(p0.x, p0.y + k * ystep, static_cast<float>(k));
+            plotAA(p0.x, p0.y - k * ystep, static_cast<float>(k));
+        }
+    }
 
-        x += 1.0f;
-        y += gradient;
+    for (int x = x_start; x <= x_end; ++x) {
+        int y_center = static_cast<int>(intery);
+        float frac = intery - y_center;
+
+        if (thickness <= 1.0f + 1e-3f) {
+            // Thin line (1px): classic Gupta-Sproull, blend 3 pixels
+            for (int k = -1; k <= 1; ++k) {
+                float d = std::abs(k - frac);
+                if (steep)
+                    plotAA(y_center + k, x, d);
+                else
+                    plotAA(x, y_center + k, d);
+            }
+        } else {
+            // Thicker line: blend full coverage range
+            for (int k = -coverageRange; k <= coverageRange; ++k) {
+                float d = std::abs(k - frac);
+                if (steep)
+                    plotAA(y_center + k, x, d);
+                else
+                    plotAA(x, y_center + k, d);
+            }
+        }
+        intery += gradient;
+    }
+
+    // End pixel
+    if (steep) {
+        plotAA(p1.y, p1.x, 0.0f);
+        for (int k = 1; k <= coverageRange; ++k) {
+            plotAA(p1.y + k * ystep, p1.x, static_cast<float>(k));
+            plotAA(p1.y - k * ystep, p1.x, static_cast<float>(k));
+        }
+    } else {
+        plotAA(p1.x, p1.y, 0.0f);
+        for (int k = 1; k <= coverageRange; ++k) {
+            plotAA(p1.x, p1.y + k * ystep, static_cast<float>(k));
+            plotAA(p1.x, p1.y - k * ystep, static_cast<float>(k));
+        }
     }
 }
+
+
+
 
 void drawLineDDA(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& color, int thickness = 1) {
     
