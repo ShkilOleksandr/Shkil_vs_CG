@@ -221,6 +221,8 @@ void try_select_polygon(cv::Point pt) {
             cv::Point b = vertices[(j + 1) % vertices.size()];
             if (dist_to_segment(pt, a, b) < threshold) {
                 selectedPolygonIndex = i;
+                selectedCircleIndex = -1;
+                selectedLineIndex = -1;
                 std::cout << "Polygon selected with middle click.\n";
                 return;
             }
