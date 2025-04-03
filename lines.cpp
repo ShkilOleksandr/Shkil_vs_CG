@@ -49,6 +49,8 @@ int selectedVertexIndex = -1;  // used for vertex or edge
 
 std::vector<cv::Point> currentPolygonVertices; // in-progress polygon
 
+bool use_antialiasing = false; 
+
 void drawCircleMidpoint(cv::Mat& img, cv::Point center, int radius, const cv::Vec3b& color) {
     int x = 0, y = radius;
     int d = 1 - radius;
@@ -76,7 +78,109 @@ void drawCircleMidpoint(cv::Mat& img, cv::Point center, int radius, const cv::Ve
     }
 }
 
+double distance_to_line(cv::Point p, cv::Point a, cv::Point b) {
+    cv::Point ab = b - a;
+    double ab_len_sq = ab.dot(ab);
+
+    if (ab_len_sq == 0.0)
+        return cv::norm(p - a);  // a == b → treat as point
+
+    double t = std::clamp((p - a).dot(ab) / ab_len_sq, 0.0, 1.0);
+    cv::Point proj = a + t * ab;
+
+    return cv::norm(p - proj);
+}
+
+cv::Vec3b lerp(const cv::Vec3b& a, const cv::Vec3b& b, float t) {
+    cv::Vec3b result;
+    for (int i = 0; i < 3; ++i)
+        result[i] = static_cast<uchar>((1 - t) * a[i] + t * b[i]);
+    return result;
+}
+
+float coverage(float thickness, float distance) {
+    float half = thickness / 2.0f;
+    float fade = std::max(0.0f, 1.0f - distance / half);
+    return fade * fade;  // makes outer pixels dimmer
+}
+
+
+
+
+void plot(cv::Mat& img, int x, int y, float brightness, const cv::Vec3b& color) {
+    if (x >= 0 && x < img.cols && y >= 0 && y < img.rows) {
+        cv::Vec3b& pixel = img.at<cv::Vec3b>(y, x);
+        pixel = lerp(pixel, color, brightness);
+    }
+}
+
+void drawLineGuptaSproull(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& color, float thickness = 1.0f) {
+    bool steep = std::abs(p2.y - p1.y) > std::abs(p2.x - p1.x);
+    
+    if (steep) {
+        std::swap(p1.x, p1.y);
+        std::swap(p2.x, p2.y);
+    }
+    if (p1.x > p2.x) std::swap(p1, p2);
+
+    int dx = p2.x - p1.x;
+    int dy = p2.y - p1.y;
+
+    float gradient = (dx == 0) ? 1.0f : dy / static_cast<float>(dx);
+    float length = std::sqrt(dx * dx + dy * dy);
+    if (length == 0) return;
+
+    float invLength = 1.0f / length;
+    float normal_x = steep ? -1 : gradient;
+    float normal_y = steep ? gradient : 1;
+    float normal_len = std::sqrt(normal_x * normal_x + normal_y * normal_y);
+    normal_x /= normal_len;
+    normal_y /= normal_len;
+
+    auto intensify = [&](float fx, float fy, float dist) {
+        float cov = coverage(thickness, std::abs(dist));
+        if (cov > 0) {
+            int ix = static_cast<int>(std::floor(fx + 0.5f));
+            int iy = static_cast<int>(std::floor(fy + 0.5f));
+            if (steep)
+                plot(img, iy, ix, cov, color); // reverse
+            else
+                plot(img, ix, iy, cov, color);
+        }
+    };
+
+    float x = static_cast<float>(p1.x);
+    float y = static_cast<float>(p1.y);
+
+    for (int i = 0; i <= dx; ++i) {
+        // Central pixel
+        intensify(x, y, 0);
+
+        // Thickness simulation: perpendicular to line
+        for (int j = 1; j <= thickness; ++j) {
+            float offset_x = normal_x * j;
+            float offset_y = normal_y * j;
+            intensify(x + offset_x, y + offset_y, j);
+            intensify(x - offset_x, y - offset_y, j);
+        }
+
+        x += 1.0f;
+        y += gradient;
+    }
+}
+
+
+
+
+
 void drawLineDDA(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& color, int thickness = 1) {
+    
+    if(use_antialiasing)
+    {
+        drawLineGuptaSproull(image, p1, p2, color, thickness);
+        return;
+    }
+
     int dx = p2.x - p1.x;
     int dy = p2.y - p1.y;
     int steps = std::max(std::abs(dx), std::abs(dy));
@@ -648,12 +752,14 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     GtkWidget* line_item = gtk_menu_item_new_with_label("Line");
     GtkWidget* circle_item = gtk_menu_item_new_with_label("Circle");
     GtkWidget* polygon_item = gtk_menu_item_new_with_label("Polygon");
+    GtkWidget* aa_toggle_item = gtk_check_menu_item_new_with_label("Enable Anti-Aliasing");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), line_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), circle_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), polygon_item);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
     gtk_menu_shell_append(GTK_MENU_SHELL(shape_menu_bar), shape_menu_root);
+    gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), aa_toggle_item);
 
     g_signal_connect(line_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Line;
@@ -668,6 +774,12 @@ GtkWidget* create_shape_menu(GtkWidget* window) {
     g_signal_connect(polygon_item, "activate", G_CALLBACK(+[](GtkWidget*, gpointer) {
         currentShape = ShapeType::Polygon;
         std::cout << "Shape changed to: Polygon" << std::endl;
+    }), NULL);
+
+    g_signal_connect(aa_toggle_item, "toggled", G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+        use_antialiasing = gtk_check_menu_item_get_active(item);
+        std::cout << "Anti-aliasing: " << (use_antialiasing ? "ON" : "OFF") << std::endl;
+        redraw_shapes(drawing_area);
     }), NULL);
 
     return shape_menu_bar;
