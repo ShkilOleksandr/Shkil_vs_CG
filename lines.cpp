@@ -106,7 +106,7 @@ cv::Vec3b lerp(const cv::Vec3b& a, const cv::Vec3b& b, float t) {
 float coverage(float thickness, float distance) {
     float radius = thickness / 2.0f;
     float t = distance / radius;
-    return std::exp(-t * t * 2.0f);  // like Gaussian blur
+    return std::exp(-t * t * 0.75f);  // softer blending
 }
 
 
