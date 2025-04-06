@@ -50,9 +50,9 @@ PolygonMoveMode polygonMoveMode = PolygonMoveMode::None;
 static cv::Point storedClick;
 static bool waitingForSecondClick = false;
 
-int selectedVertexIndex = -1;  // used for vertex or edge
+int selectedVertexIndex = -1;
 
-std::vector<cv::Point> currentPolygonVertices; // in-progress polygon
+std::vector<cv::Point> currentPolygonVertices;
 
 bool use_antialiasing = false; 
 
@@ -88,7 +88,7 @@ double distance_to_line(cv::Point p, cv::Point a, cv::Point b) {
     double ab_len_sq = ab.dot(ab);
 
     if (ab_len_sq == 0.0)
-        return cv::norm(p - a);  // a == b → treat as point
+        return cv::norm(p - a);
 
     double t = std::clamp((p - a).dot(ab) / ab_len_sq, 0.0, 1.0);
     cv::Point proj = a + t * ab;
@@ -96,17 +96,10 @@ double distance_to_line(cv::Point p, cv::Point a, cv::Point b) {
     return cv::norm(p - proj);
 }
 
-cv::Vec3b lerp(const cv::Vec3b& a, const cv::Vec3b& b, float t) {
-    cv::Vec3b result;
-    for (int i = 0; i < 3; ++i)
-        result[i] = static_cast<uchar>((1 - t) * a[i] + t * b[i]);
-    return result;
-}
-
 float coverage(float thickness, float distance) {
     float radius = thickness / 2.0f;
     float t = distance / radius;
-    return std::exp(-t * t * 0.75f);  // softer blending
+    return std::exp(-t * t * 0.75f);
 }
 
 
@@ -168,25 +161,14 @@ void drawLineGuptaSproull(cv::Mat& img, cv::Point p0, cv::Point p1, const cv::Ve
         int y_center = static_cast<int>(intery);
         float frac = intery - y_center;
 
-        if (thickness <= 1.0f + 1e-3f) {
-            // Thin line (1px): classic Gupta-Sproull, blend 3 pixels
-            for (int k = -1; k <= 1; ++k) {
-                float d = std::abs(k - frac);
-                if (steep)
-                    plotAA(y_center + k, x, d);
-                else
-                    plotAA(x, y_center + k, d);
-            }
-        } else {
-            // Thicker line: blend full coverage range
-            for (int k = -coverageRange; k <= coverageRange; ++k) {
-                float d = std::abs(k - frac);
-                if (steep)
-                    plotAA(y_center + k, x, d);
-                else
-                    plotAA(x, y_center + k, d);
-            }
+        for (int k = -coverageRange; k <= coverageRange; ++k) {
+            float d = std::abs(k - frac);
+            if (steep)
+                plotAA(y_center + k, x, d);
+            else
+                plotAA(x, y_center + k, d);
         }
+        
         intery += gradient;
     }
 
