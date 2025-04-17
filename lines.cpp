@@ -142,21 +142,6 @@ void drawLineGuptaSproull(cv::Mat& img, cv::Point p0, cv::Point p1, const cv::Ve
     int x_start = p0.x + 1;
     int x_end = p1.x - 1;
 
-    // Start pixel
-    if (steep) {
-        plotAA(p0.y, p0.x, 0.0f);
-        for (int k = 1; k <= coverageRange; ++k) {
-            plotAA(p0.y + k * ystep, p0.x, static_cast<float>(k));
-            plotAA(p0.y - k * ystep, p0.x, static_cast<float>(k));
-        }
-    } else {
-        plotAA(p0.x, p0.y, 0.0f);
-        for (int k = 1; k <= coverageRange; ++k) {
-            plotAA(p0.x, p0.y + k * ystep, static_cast<float>(k));
-            plotAA(p0.x, p0.y - k * ystep, static_cast<float>(k));
-        }
-    }
-
     for (int x = x_start; x <= x_end; ++x) {
         int y_center = static_cast<int>(intery);
         float frac = intery - y_center;
@@ -168,67 +153,164 @@ void drawLineGuptaSproull(cv::Mat& img, cv::Point p0, cv::Point p1, const cv::Ve
             else
                 plotAA(x, y_center + k, d);
         }
-        
+
         intery += gradient;
     }
 
-    // End pixel
-    if (steep) {
-        plotAA(p1.y, p1.x, 0.0f);
-        for (int k = 1; k <= coverageRange; ++k) {
-            plotAA(p1.y + k * ystep, p1.x, static_cast<float>(k));
-            plotAA(p1.y - k * ystep, p1.x, static_cast<float>(k));
-        }
-    } else {
-        plotAA(p1.x, p1.y, 0.0f);
-        for (int k = 1; k <= coverageRange; ++k) {
-            plotAA(p1.x, p1.y + k * ystep, static_cast<float>(k));
-            plotAA(p1.x, p1.y - k * ystep, static_cast<float>(k));
-        }
-    }
 }
 
 
 
 
-void drawLineDDA(cv::Mat& img, cv::Point p1, cv::Point p2, const cv::Vec3b& color, int thickness = 1) {
+void setPixel(cv::Mat& img, int x, int y, const cv::Vec3b& color) {
+    if (x >= 0 && x < img.cols && y >= 0 && y < img.rows) {
+        img.at<cv::Vec3b>(y, x) = color;
+    }
+}
+
+cv::Point2f perpendicularOffset(cv::Point p0, cv::Point p1, float offset) {
+    float dx = p1.x - p0.x;
+    float dy = p1.y - p0.y;
+    float length = std::sqrt(dx*dx + dy*dy);
+    if (length == 0) return {0, 0};
+    return { -dy * offset / length, dx * offset / length };
+}
+
+
+void drawLineThickPixelCopyAA(cv::Mat& img, cv::Point p0, cv::Point p1, const cv::Vec3b& color, int thickness = 1, bool applyAA = false) {
     
     if(use_antialiasing)
     {
-        drawLineGuptaSproull(image, p1, p2, color, thickness);
-        return;
-    }
-
-    int dx = p2.x - p1.x;
-    int dy = p2.y - p1.y;
-    int steps = std::max(std::abs(dx), std::abs(dy));
-
-    float x_inc = dx / static_cast<float>(steps);
-    float y_inc = dy / static_cast<float>(steps);
-    float x = p1.x, y = p1.y;
-
-    int half = (thickness - 1) / 2;
-
-    for (int i = 0; i <= steps; ++i) {
-        int px = static_cast<int>(std::round(x));
-        int py = static_cast<int>(std::round(y));
-
-        for (int dy = -half; dy <= half; ++dy) {
-            for (int dx = -half; dx <= half; ++dx) {
-                int nx = px + dx;
-                int ny = py + dy;
-
-                if (nx >= 0 && nx < img.cols && ny >= 0 && ny < img.rows) {
-                    img.at<cv::Vec3b>(ny, nx) = color;
-                }
+        auto plotAA = [&](int x, int y, float d) {
+            float alpha = coverage(thickness, d);
+            if (alpha > 0.0f) plot(img, x, y, alpha, color);
+        };
+    
+        bool steep = std::abs(p1.y - p0.y) > std::abs(p1.x - p0.x);
+        if (steep) {
+            std::swap(p0.x, p0.y);
+            std::swap(p1.x, p1.y);
+        }
+        if (p0.x > p1.x)
+            std::swap(p0, p1);
+    
+        int dx = p1.x - p0.x;
+        int dy = p1.y - p0.y;
+    
+        int ystep = (p1.y > p0.y) ? 1 : -1;
+        float gradient = (dx == 0) ? 0.0f : static_cast<float>(dy) / dx;
+        float intery = static_cast<float>(p0.y) + gradient;
+    
+        float radius = thickness / 2.0f;
+        int coverageRange = std::ceil(radius) + 1;
+    
+        int x_start = p0.x + 1;
+        int x_end = p1.x - 1;
+    
+        // Start pixel
+        if (steep) {
+            plotAA(p0.y, p0.x, 0.0f);
+            for (int k = 1; k <= coverageRange; ++k) {
+                plotAA(p0.y + k * ystep, p0.x, static_cast<float>(k));
+                plotAA(p0.y - k * ystep, p0.x, static_cast<float>(k));
+            }
+        } else {
+            plotAA(p0.x, p0.y, 0.0f);
+            for (int k = 1; k <= coverageRange; ++k) {
+                plotAA(p0.x, p0.y + k * ystep, static_cast<float>(k));
+                plotAA(p0.x, p0.y - k * ystep, static_cast<float>(k));
             }
         }
-
-        x += x_inc;
-        y += y_inc;
+    
+        for (int x = x_start; x <= x_end; ++x) {
+            int y_center = static_cast<int>(intery);
+            float frac = intery - y_center;
+    
+            for (int k = -coverageRange; k <= coverageRange; ++k) {
+                float d = std::abs(k - frac);
+                if (steep)
+                    plotAA(y_center + k, x, d);
+                else
+                    plotAA(x, y_center + k, d);
+            }
+            
+            intery += gradient;
+        }
+    
+        // End pixel
+        if (steep) {
+            plotAA(p1.y, p1.x, 0.0f);
+            for (int k = 1; k <= coverageRange; ++k) {
+                plotAA(p1.y + k * ystep, p1.x, static_cast<float>(k));
+                plotAA(p1.y - k * ystep, p1.x, static_cast<float>(k));
+            }
+        } else {
+            plotAA(p1.x, p1.y, 0.0f);
+            for (int k = 1; k <= coverageRange; ++k) {
+                plotAA(p1.x, p1.y + k * ystep, static_cast<float>(k));
+                plotAA(p1.x, p1.y - k * ystep, static_cast<float>(k));
+            }
+        }
     }
+    else
+    {
+        float dx = p1.x - p0.x;
+        float dy = p1.y - p0.y;
+        int steps = std::max(std::abs(dx), std::abs(dy));
 
+        float xInc = dx / steps;
+        float yInc = dy / steps;
+
+        float x = p0.x;
+        float y = p0.y;
+        int radius = thickness / 2;
+
+        for (int i = 0; i <= steps; ++i) {
+            int cx = std::round(x);
+            int cy = std::round(y);
+
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    setPixel(img, cx + dx, cy + dy, color);
+                }
+            }
+
+            x += xInc;
+            y += yInc;
+        }
+    }
 }
+
+
+
+
+
+void drawLineDDA(cv::Mat& img, cv::Point p0, cv::Point p1, const cv::Vec3b& color, int thickness = 1) {
+    if (use_antialiasing && thickness == 1) {
+        drawLineGuptaSproull(img, p0, p1, color, thickness);
+    } else if (thickness > 1) {
+        drawLineThickPixelCopyAA(img, p0, p1, color, thickness, use_antialiasing);
+    }
+     else {
+        // Regular DDA pixel-by-pixel
+        float dx = p1.x - p0.x;
+        float dy = p1.y - p0.y;
+        int steps = std::max(std::abs(dx), std::abs(dy));
+
+        float xInc = dx / steps;
+        float yInc = dy / steps;
+
+        float x = p0.x;
+        float y = p0.y;
+
+        for (int i = 0; i <= steps; ++i) {
+            setPixel(img, std::round(x), std::round(y), color);
+            x += xInc;
+            y += yInc;
+        }
+    }
+}
+
 
 void draw_in_progress_polygon(cv::Mat& img) {
     if (currentPolygonVertices.size() < 2) return;
