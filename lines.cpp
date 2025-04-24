@@ -906,16 +906,21 @@ void save_shapes_to_file(GtkWidget *parent) {
 
     for (const auto &line : lines)
       out << "LINE " << line.start.x << " " << line.start.y << " " << line.end.x
-          << " " << line.end.y << " " << line.thickness << "\n";
+          << " " << line.end.y << " " << line.thickness << " "
+          << (int)line.color[0] << " " << (int)line.color[1] << " " << (int)line.color[2]
+          << "\n";
 
     for (const auto &circle : circles)
       out << "CIRCLE " << circle.center.x << " " << circle.center.y << " "
-          << circle.radius << "\n";
+          << circle.radius << " "
+          << (int)circle.color[0] << " " << (int)circle.color[1] << " " << (int)circle.color[2]
+          << "\n";
 
     for (const auto &poly : polygons) {
       out << "POLYGON " << poly.thickness << " " << poly.vertices.size();
       for (const auto &v : poly.vertices)
         out << " " << v.x << " " << v.y;
+      out << " " << (int)poly.color[0] << " " << (int)poly.color[1] << " " << (int)poly.color[2];
       out << "\n";
     }
 
@@ -951,21 +956,27 @@ void load_shapes_from_file(GtkWidget *parent) {
     while (in >> type) {
       if (type == "LINE") {
         Line l;
-        in >> l.start.x >> l.start.y >> l.end.x >> l.end.y >> l.thickness;
+        int r, g, b;
+        in >> l.start.x >> l.start.y >> l.end.x >> l.end.y >> l.thickness >> r >> g >> b;
+        l.color = cv::Vec3b(b, g, r);  // OpenCV uses BGR
         lines.push_back(l);
       } else if (type == "CIRCLE") {
         Circle c;
-        in >> c.center.x >> c.center.y >> c.radius;
+        int r, g, b;
+        in >> c.center.x >> c.center.y >> c.radius >> r >> g >> b;
+        c.color = cv::Vec3b(b, g, r);
         circles.push_back(c);
       } else if (type == "POLYGON") {
         Polygon p;
-        int count;
+        int count, r, g, b;
         in >> p.thickness >> count;
         for (int i = 0; i < count; ++i) {
           cv::Point pt;
           in >> pt.x >> pt.y;
           p.vertices.push_back(pt);
         }
+        in >> r >> g >> b;
+        p.color = cv::Vec3b(b, g, r);
         polygons.push_back(p);
       }
     }
