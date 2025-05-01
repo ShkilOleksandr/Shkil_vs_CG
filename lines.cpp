@@ -5,7 +5,7 @@
 #include <opencv2/opencv.hpp>
 #include <vector>
 
-enum class ShapeType { Line, Circle, Polygon }; // Added Polygon
+enum class ShapeType { Line, Circle, Polygon, Rectangle };
 ShapeType currentShape = ShapeType::Line;
 GtkWidget *shape_menu;
 
@@ -25,6 +25,12 @@ struct Polygon {
   std::vector<cv::Point> vertices;
   int thickness;
   cv::Vec3b color = {255, 0, 0}; // default blue
+};
+
+struct Bezier {
+  std::vector<cv::Point> ctrl; // control points
+  int thickness;
+  cv::Vec3b color;
 };
 
 enum class EditMode { None, MoveStart, MoveEnd };
@@ -49,11 +55,28 @@ PolygonMoveMode polygonMoveMode = PolygonMoveMode::None;
 static cv::Point storedClick;
 static bool waitingForSecondClick = false;
 
+std::vector<Bezier> beziers;
+std::vector<cv::Point> currentBezier;
+bool inBezierMode = false;
+
 int selectedVertexIndex = -1;
 
 std::vector<cv::Point> currentPolygonVertices;
 
 bool use_antialiasing = false;
+
+bool use_bezier = false;
+bool end_bezier = false;
+
+// Task 4
+
+static cv::Point rectCorner;
+static bool awaitingRectSecond = false;
+static int selectedRectIndex = -1;
+static int selectedRectVertexIndex = -1;
+static bool awaitingRectCornerMove = false;
+static bool awaitingRectEdgeMove     = false;
+static int  selectedRectEdgeIndex    = -1;
 
 void drawCircleMidpoint(cv::Mat &img, cv::Point center, int radius,
                         const cv::Vec3b &color) {
@@ -213,9 +236,8 @@ void drawLineThickPixelCopyAA(cv::Mat &img, cv::Point p0, cv::Point p1,
   cv::Point2f perp(-ud.y, ud.x);
 
   float radius = thickness / 2.0f;
-  float blendWidth = 1.0f; 
+  float blendWidth = 1.0f;
 
-  
   std::vector<cv::Point> pts = {p0, p1};
   cv::Rect bbox = cv::boundingRect(pts);
   bbox.x -= thickness;
@@ -223,22 +245,21 @@ void drawLineThickPixelCopyAA(cv::Mat &img, cv::Point p0, cv::Point p1,
   bbox.width += 2 * thickness;
   bbox.height += 2 * thickness;
 
-  
   for (int y = bbox.y; y < bbox.y + bbox.height; ++y) {
     for (int x = bbox.x; x < bbox.x + bbox.width; ++x) {
-      
+
       cv::Point2f pt(x + 0.5f, y + 0.5f);
-      
+
       cv::Point2f v = pt - cv::Point2f(p0);
 
       float t = v.dot(ud);
-      
+
       if (t < 0.0f)
         t = 0.0f;
       if (t > len)
         t = len;
       cv::Point2f proj = cv::Point2f(p0) + t * ud;
-      
+
       float d = cv::norm(pt - proj);
 
       float alpha = 0.0f;
@@ -283,6 +304,12 @@ void drawLineDDA(cv::Mat &img, cv::Point p0, cv::Point p1,
 void draw_in_progress_polygon(cv::Mat &img) {
   if (currentPolygonVertices.size() < 2)
     return;
+  if (currentPolygonVertices.size() == 1) {
+    // draw a small filled circle of radius 3 in yellow
+    drawCircleMidpoint(img, currentPolygonVertices[0], 3,
+                       cv::Vec3b(0, 200, 200));
+    return;
+  }
   for (size_t i = 0; i < currentPolygonVertices.size() - 1; ++i) {
     drawLineDDA(img, currentPolygonVertices[i], currentPolygonVertices[i + 1],
                 cv::Vec3b(200, 200, 0), 1);
@@ -299,6 +326,30 @@ void drawPolygon(cv::Mat &img, const Polygon &poly, const cv::Vec3b &color) {
   }
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static cv::Point lerp(const cv::Point &a, const cv::Point &b, double t) {
+  return {int(a.x + (b.x - a.x) * t + .5), int(a.y + (b.y - a.y) * t + .5)};
+}
+
+cv::Point bezierPoint(const std::vector<cv::Point> &P, double t) {
+  std::vector<cv::Point> tmp = P;
+  for (int k = 1; k < P.size(); ++k)
+    for (int i = 0; i + k < P.size(); ++i)
+      tmp[i] = lerp(tmp[i], tmp[i + 1], t);
+  return tmp[0];
+}
+
+void drawBezier(cv::Mat &img, const Bezier &bz) {
+  const int STEPS = 100;
+  std::vector<cv::Point> pts;
+  for (int i = 0; i <= STEPS; ++i)
+    pts.push_back(bezierPoint(bz.ctrl, i / (double)STEPS));
+  for (int i = 0; i + 1 < pts.size(); ++i)
+    drawLineDDA(img, pts[i], pts[i + 1], bz.color, bz.thickness);
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void redraw_shapes(GtkWidget *widget) {
   image.setTo(cv::Scalar(255, 255, 255));
   for (const auto &line : lines)
@@ -308,6 +359,20 @@ void redraw_shapes(GtkWidget *widget) {
   for (const auto &poly : polygons)
     drawPolygon(image, poly, poly.color);
 
+  for (auto &bz : beziers)
+    drawBezier(image, bz);
+
+  if (inBezierMode) {
+    if (currentBezier.empty()) {
+    } else if (currentBezier.size() == 1) {
+      drawCircleMidpoint(image, currentBezier[0], 3, cv::Vec3b(200, 200, 200));
+    } else {
+      for (size_t i = 0; i + 1 < currentBezier.size(); ++i) {
+        drawLineDDA(image, currentBezier[i], currentBezier[i + 1],
+                    cv::Vec3b(200, 200, 200), 1);
+      }
+    }
+  }
   draw_in_progress_polygon(image);
   gtk_widget_queue_draw(widget);
 }
@@ -494,7 +559,7 @@ void handle_polygon_movement(cv::Point pt, GtkWidget *widget) {
 
 void handle_polygon_selection(cv::Point pt, GdkEventButton *event,
                               GtkWidget *widget) {
-  const int threshold = 10;
+  const int threshold = 30;
 
   for (int i = 0; i < polygons.size(); ++i) {
     const auto &poly = polygons[i];
@@ -527,7 +592,6 @@ void handle_polygon_selection(cv::Point pt, GdkEventButton *event,
     }
   }
 
-  // If nothing selected, assume vertex creation
   try_complete_polygon(pt, widget);
 }
 
@@ -717,9 +781,147 @@ void handle_line_click(cv::Point pt, GdkEventButton *event, GtkWidget *widget,
   }
 }
 
+
+void handle_rectangle_click(cv::Point pt,
+  GdkEventButton *event,
+  GtkWidget    *widget)
+{
+  const int thresh = 30;
+
+
+    if (event->button == 1 &&
+          waitingForSecondClick &&
+          polygonMoveMode == PolygonMoveMode::MoveWhole) {
+        handle_polygon_movement(pt, widget);
+        return;
+      }
+
+  if (event->button == 1 && (event->state & GDK_CONTROL_MASK)) {
+
+    for (int i = 0; i < (int)polygons.size(); ++i) {
+      if (polygons[i].vertices.size() == 4 &&
+        is_point_inside_polygon(polygons[i].vertices, pt)) {
+
+        polygonMoveMode      = PolygonMoveMode::MoveWhole;
+        selectedPolygonIndex = i;
+        storedClick          = pt;
+        waitingForSecondClick= true;
+        return;
+      }
+    }
+  }
+
+  if (event->button == 1 && awaitingRectCornerMove) {
+  Polygon &rect = polygons[selectedRectIndex];
+  int opp = (selectedRectVertexIndex + 2) % 4;
+  cv::Point fixedPt = rect.vertices[opp];
+  cv::Point newPt   = pt;
+
+  std::vector<cv::Point> v = {
+  { fixedPt.x, fixedPt.y },
+  { fixedPt.x, newPt.y   },
+  { newPt.x,   newPt.y   },
+  { newPt.x,   fixedPt.y }
+  };
+  rect.vertices = v;
+  awaitingRectCornerMove = false;
+  selectedRectIndex      = -1;
+  selectedRectVertexIndex= -1;
+  redraw_shapes(widget);
+  return;
+  }
+
+
+  if (event->button == 1 && awaitingRectEdgeMove) {
+  Polygon &rect = polygons[selectedRectIndex];
+  int x0 = rect.vertices[0].x,
+  y0 = rect.vertices[0].y,
+  x1 = rect.vertices[2].x,
+  y1 = rect.vertices[2].y,
+  e  = selectedRectEdgeIndex;
+  switch (e) {
+  case 0: x0 = pt.x; break;  // left
+  case 1: y1 = pt.y; break;  // bottom
+  case 2: x1 = pt.x; break;  // right
+  case 3: y0 = pt.y; break;  // top
+  }
+  rect.vertices = {{x0,y0},{x0,y1},{x1,y1},{x1,y0}};
+  awaitingRectEdgeMove  = false;
+  selectedRectIndex     = -1;
+  selectedRectEdgeIndex = -1;
+  redraw_shapes(widget);
+  return;
+  }
+
+
+  if (event->button == 1) {
+  for (int i = 0; i < (int)polygons.size(); ++i) {
+  if (polygons[i].vertices.size() != 4) continue;
+  int eidx;
+  if (is_point_near_edge_center(polygons[i].vertices, pt, eidx, thresh)) {
+  selectedRectIndex     = i;
+  selectedRectEdgeIndex = eidx;
+  awaitingRectEdgeMove  = true;
+  return;
+  }
+  }
+  }
+
+  if (event->button == 1) {
+  for (int i = 0; i < (int)polygons.size(); ++i) {
+  if (polygons[i].vertices.size() != 4) continue;
+  int vidx;
+  if (is_point_near_vertex(polygons[i].vertices, pt, vidx, thresh)) {
+  selectedRectIndex       = i;
+  selectedRectVertexIndex = vidx;
+  awaitingRectCornerMove  = true;
+  return;
+  }
+  }
+  }
+
+
+  if (event->button == 1) {
+  if (!awaitingRectSecond) {
+  rectCorner         = pt;
+  awaitingRectSecond = true;
+  } else {
+  cv::Point a = rectCorner, b = pt;
+  polygons.push_back( Polygon{
+  {{a.x,a.y},{a.x,b.y},{b.x,b.y},{b.x,a.y}},
+  1,
+  {255,0,0}
+  });
+  awaitingRectSecond = false;
+  redraw_shapes(widget);
+  }
+  return;
+  }
+
+
+  if (event->button == 2) {
+  try_select_polygon(pt);
+  return;
+  }
+
+
+  if (event->button == 3) {
+  try_delete_polygon(pt, widget);
+  return;
+  }
+}
+
+
 gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
   cv::Point pt = map_click_to_image(widget, event->x, event->y);
   const int threshold = 15;
+  if (inBezierMode) {
+    if (event->button == 1) {
+      currentBezier.push_back(pt);
+      redraw_shapes(widget);
+    }
+    return TRUE;
+  }
 
   switch (currentShape) {
   case ShapeType::Polygon:
@@ -736,6 +938,9 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
     break;
   case ShapeType::Line:
     handle_line_click(pt, event, widget, threshold);
+    break;
+  case ShapeType::Rectangle:
+    handle_rectangle_click(pt, event, widget);
     break;
   }
 
@@ -848,7 +1053,9 @@ void clear_all_shapes(GtkWidget *widget) {
   awaitingSecondClick = false;
   polygonMoveMode = PolygonMoveMode::None;
   editMode = EditMode::None;
-
+  beziers.clear();
+  currentBezier.clear();
+  inBezierMode = false;
   std::cout << "Canvas cleared.\n";
   redraw_shapes(widget);
 }
@@ -907,21 +1114,29 @@ void save_shapes_to_file(GtkWidget *parent) {
     for (const auto &line : lines)
       out << "LINE " << line.start.x << " " << line.start.y << " " << line.end.x
           << " " << line.end.y << " " << line.thickness << " "
-          << (int)line.color[0] << " " << (int)line.color[1] << " " << (int)line.color[2]
-          << "\n";
+          << (int)line.color[0] << " " << (int)line.color[1] << " "
+          << (int)line.color[2] << "\n";
 
     for (const auto &circle : circles)
       out << "CIRCLE " << circle.center.x << " " << circle.center.y << " "
-          << circle.radius << " "
-          << (int)circle.color[0] << " " << (int)circle.color[1] << " " << (int)circle.color[2]
-          << "\n";
+          << circle.radius << " " << (int)circle.color[0] << " "
+          << (int)circle.color[1] << " " << (int)circle.color[2] << "\n";
 
     for (const auto &poly : polygons) {
       out << "POLYGON " << poly.thickness << " " << poly.vertices.size();
       for (const auto &v : poly.vertices)
         out << " " << v.x << " " << v.y;
-      out << " " << (int)poly.color[0] << " " << (int)poly.color[1] << " " << (int)poly.color[2];
+      out << " " << (int)poly.color[0] << " " << (int)poly.color[1] << " "
+          << (int)poly.color[2];
       out << "\n";
+    }
+
+    for (const auto &bz : beziers) {
+      out << "BEZIER " << bz.thickness << " " << bz.ctrl.size();
+      for (const auto &p : bz.ctrl)
+        out << " " << p.x << " " << p.y;
+      out << " " << (int)bz.color[0] << " " << (int)bz.color[1] << " "
+          << (int)bz.color[2] << "\n";
     }
 
     out.close();
@@ -957,8 +1172,9 @@ void load_shapes_from_file(GtkWidget *parent) {
       if (type == "LINE") {
         Line l;
         int r, g, b;
-        in >> l.start.x >> l.start.y >> l.end.x >> l.end.y >> l.thickness >> r >> g >> b;
-        l.color = cv::Vec3b(b, g, r);  // OpenCV uses BGR
+        in >> l.start.x >> l.start.y >> l.end.x >> l.end.y >> l.thickness >>
+            r >> g >> b;
+        l.color = cv::Vec3b(b, g, r); // OpenCV uses BGR
         lines.push_back(l);
       } else if (type == "CIRCLE") {
         Circle c;
@@ -978,6 +1194,20 @@ void load_shapes_from_file(GtkWidget *parent) {
         in >> r >> g >> b;
         p.color = cv::Vec3b(b, g, r);
         polygons.push_back(p);
+      } else if (type == "BEZIER") {
+        Bezier bz;
+        int count, r, g, b;
+        in >> bz.thickness >> count;
+        bz.ctrl.clear();
+        for (int i = 0; i < count; ++i) {
+          cv::Point pt;
+          in >> pt.x >> pt.y;
+          bz.ctrl.push_back(pt);
+        }
+        in >> r >> g >> b;
+
+        bz.color = cv::Vec3b(b, g, r);
+        beziers.push_back(bz);
       }
     }
 
@@ -1018,81 +1248,103 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
   GtkWidget *polygon_item = gtk_menu_item_new_with_label("Polygon");
   GtkWidget *aa_toggle_item =
       gtk_check_menu_item_new_with_label("Enable Anti-Aliasing");
+  GtkWidget *bezier_toggle =
+      gtk_check_menu_item_new_with_label("Bezier Curve Mode");
+  GtkWidget *rect_item = gtk_menu_item_new_with_label("Rectangle");
 
   gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), line_item);
   gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), circle_item);
   gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), polygon_item);
   gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), aa_toggle_item);
+  gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), bezier_toggle);
+  gtk_menu_shell_append(GTK_MENU_SHELL(shape_submenu), rect_item);
 
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), shape_menu_root);
 
   // === SIGNAL CONNECTIONS ===
+  {
+    g_signal_connect(line_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       currentShape = ShapeType::Line;
+                       selectedCircleIndex = -1;
+                       selectedPolygonIndex = -1;
+                       std::cout << "Shape changed to: Line" << std::endl;
+                     }),
+                     NULL);
 
-  g_signal_connect(line_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     currentShape = ShapeType::Line;
-                     selectedCircleIndex = -1;
-                     selectedPolygonIndex = -1;
-                     std::cout << "Shape changed to: Line" << std::endl;
-                   }),
-                   NULL);
+    g_signal_connect(circle_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       currentShape = ShapeType::Circle;
+                       selectedLineIndex = -1;
+                       selectedPolygonIndex = -1;
+                       std::cout << "Shape changed to: Circle" << std::endl;
+                     }),
+                     NULL);
 
-  g_signal_connect(circle_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     currentShape = ShapeType::Circle;
-                     selectedLineIndex = -1;
-                     selectedPolygonIndex = -1;
-                     std::cout << "Shape changed to: Circle" << std::endl;
-                   }),
-                   NULL);
+    g_signal_connect(polygon_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       currentShape = ShapeType::Polygon;
+                       selectedLineIndex = -1;
+                       selectedCircleIndex = -1;
+                       std::cout << "Shape changed to: Polygon" << std::endl;
+                     }),
+                     NULL);
 
-  g_signal_connect(polygon_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     currentShape = ShapeType::Polygon;
-                     selectedLineIndex = -1;
-                     selectedCircleIndex = -1;
-                     std::cout << "Shape changed to: Polygon" << std::endl;
-                   }),
-                   NULL);
+    g_signal_connect(aa_toggle_item, "toggled",
+                     G_CALLBACK(+[](GtkCheckMenuItem *item, gpointer) {
+                       use_antialiasing = gtk_check_menu_item_get_active(item);
+                       std::cout << "Anti-aliasing: "
+                                 << (use_antialiasing ? "ON" : "OFF")
+                                 << std::endl;
+                       redraw_shapes(drawing_area);
+                     }),
+                     NULL);
 
-  g_signal_connect(aa_toggle_item, "toggled",
-                   G_CALLBACK(+[](GtkCheckMenuItem *item, gpointer) {
-                     use_antialiasing = gtk_check_menu_item_get_active(item);
-                     std::cout << "Anti-aliasing: "
-                               << (use_antialiasing ? "ON" : "OFF")
-                               << std::endl;
-                     redraw_shapes(drawing_area);
-                   }),
-                   NULL);
+    g_signal_connect(clear_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       clear_all_shapes(drawing_area);
+                     }),
+                     NULL);
 
-  g_signal_connect(clear_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     clear_all_shapes(drawing_area);
-                   }),
-                   NULL);
+    g_signal_connect(save_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
+                       GtkWidget *win = GTK_WIDGET(user_data);
+                       save_shapes_to_file(win);
+                     }),
+                     window);
 
-  g_signal_connect(save_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
-                     GtkWidget *win = GTK_WIDGET(user_data);
-                     save_shapes_to_file(win);
-                   }),
-                   window);
+    g_signal_connect(load_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
+                       GtkWidget *win = GTK_WIDGET(user_data);
+                       load_shapes_from_file(win);
+                     }),
+                     window);
 
-  g_signal_connect(load_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
-                     GtkWidget *win = GTK_WIDGET(user_data);
-                     load_shapes_from_file(win);
-                   }),
-                   window);
-
-  g_signal_connect(color_item, "activate",
-                   G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
-                     GtkWidget *win = GTK_WIDGET(user_data);
-                     change_selected_shape_color(win);
-                   }),
-                   window);
-
+    g_signal_connect(color_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
+                       GtkWidget *win = GTK_WIDGET(user_data);
+                       change_selected_shape_color(win);
+                     }),
+                     window);
+    g_signal_connect(bezier_toggle, "toggled",
+                     G_CALLBACK(+[](GtkCheckMenuItem *m, gpointer) {
+                       inBezierMode = gtk_check_menu_item_get_active(m);
+                       if (!inBezierMode && currentBezier.size() >= 2) {
+                         beziers.push_back({currentBezier, 1, {0, 0, 0}});
+                         currentBezier.clear();
+                         redraw_shapes(drawing_area);
+                       }
+                     }),
+                     nullptr);
+    g_signal_connect(
+        rect_item, "activate", G_CALLBACK(+[](GtkWidget *, gpointer) {
+          currentShape = ShapeType::Rectangle;
+          selectedLineIndex = selectedCircleIndex = selectedPolygonIndex = -1;
+          std::cout << "Shape changed to: Rectangle\n";
+        }),
+        nullptr);
+  }
   return menu_bar;
 }
 
