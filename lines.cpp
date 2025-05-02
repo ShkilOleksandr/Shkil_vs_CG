@@ -1,11 +1,12 @@
+
 #include <cmath>
 #include <fstream>
 #include <gtk/gtk.h>
 #include <iostream>
-#include <opencv2/opencv.hpp>
 #include <vector>
+#include <opencv2/opencv.hpp>
 
-enum class ShapeType { Line, Circle, Polygon, Rectangle};
+enum class ShapeType { Line, Circle, Polygon, Rectangle };
 ShapeType currentShape = ShapeType::Line;
 GtkWidget *shape_menu;
 
@@ -37,7 +38,7 @@ enum class EditMode { None, MoveStart, MoveEnd };
 
 std::vector<Line> lines;
 std::vector<Circle> circles;
-std::vector<Polygon> polygons; 
+std::vector<Polygon> polygons;
 
 cv::Mat image;
 GtkWidget *drawing_area;
@@ -75,9 +76,8 @@ static bool awaitingRectSecond = false;
 static int selectedRectIndex = -1;
 static int selectedRectVertexIndex = -1;
 static bool awaitingRectCornerMove = false;
-static bool awaitingRectEdgeMove     = false;
-static int  selectedRectEdgeIndex    = -1;
-
+static bool awaitingRectEdgeMove = false;
+static int selectedRectEdgeIndex = -1;
 
 //  Clipping
 
@@ -85,6 +85,76 @@ static bool choose_clipping = false;
 static bool choose_cliped = false;
 static int clipedIndex = -1;
 static int clippingndex = -1;
+
+constexpr int CS_INSIDE = 0;
+constexpr int CS_LEFT   = 1;    // 0001
+constexpr int CS_RIGHT  = 2;    // 0010
+constexpr int CS_BOTTOM = 4;    // 0100
+constexpr int CS_TOP    = 8;    // 1000
+
+int computeOutCode(const cv::Point &p, int xmin, int ymin, int xmax, int ymax) {
+  int code = CS_INSIDE;
+  if      (p.x < xmin) code |= CS_LEFT;
+  else if (p.x > xmax) code |= CS_RIGHT;
+  if      (p.y < ymin) code |= CS_BOTTOM;
+  else if (p.y > ymax) code |= CS_TOP;
+  return code;
+}
+
+bool cohenSutherlandClip(cv::Point p0, cv::Point p1,
+                       int xmin, int ymin, int xmax, int ymax,
+                       cv::Point &out0, cv::Point &out1)
+{
+  int code0 = computeOutCode(p0, xmin, ymin, xmax, ymax);
+  int code1 = computeOutCode(p1, xmin, ymin, xmax, ymax);
+  bool accept = false;
+
+  while (true) {
+      if ((code0 | code1) == 0) {
+          // both inside
+          accept = true;
+          out0 = p0;  out1 = p1;
+          break;
+      }
+      else if (code0 & code1) {
+          // trivial reject
+          break;
+      }
+      else {
+          // pick one outside endpoint
+          int outcodeOut = code0 ? code0 : code1;
+          double x, y;
+
+          if (outcodeOut & CS_TOP) {
+              x = p0.x + (p1.x - p0.x) * (ymax - p0.y) / double(p1.y - p0.y);
+              y = ymax;
+          }
+          else if (outcodeOut & CS_BOTTOM) {
+              x = p0.x + (p1.x - p0.x) * (ymin - p0.y) / double(p1.y - p0.y);
+              y = ymin;
+          }
+          else if (outcodeOut & CS_RIGHT) {
+              y = p0.y + (p1.y - p0.y) * (xmax - p0.x) / double(p1.x - p0.x);
+              x = xmax;
+          }
+          else { // CS_LEFT
+              y = p0.y + (p1.y - p0.y) * (xmin - p0.x) / double(p1.x - p0.x);
+              x = xmin;
+          }
+
+          if (outcodeOut == code0) {
+              p0 = cv::Point(std::round(x), std::round(y));
+              code0 = computeOutCode(p0, xmin, ymin, xmax, ymax);
+          } else {
+              p1 = cv::Point(std::round(x), std::round(y));
+              code1 = computeOutCode(p1, xmin, ymin, xmax, ymax);
+          }
+      }
+  }
+  return accept;
+}
+
+
 
 void drawCircleMidpoint(cv::Mat &img, cv::Point center, int radius,
                         const cv::Vec3b &color) {
@@ -789,136 +859,135 @@ void handle_line_click(cv::Point pt, GdkEventButton *event, GtkWidget *widget,
   }
 }
 
+void handle_rectangle_click(cv::Point pt, GdkEventButton *event,
+                            GtkWidget *widget) {
+  const int thresh = 30;
 
-void handle_rectangle_click(cv::Point pt,
-  GdkEventButton *event,
-  GtkWidget    *widget)
-{
-          const int thresh = 30;
+  if (event->button == 1 && waitingForSecondClick &&
+      polygonMoveMode == PolygonMoveMode::MoveWhole) {
+    handle_polygon_movement(pt, widget);
+    return;
+  }
 
+  if (event->button == 1 && (event->state & GDK_CONTROL_MASK)) {
 
-          if (event->button == 1 &&
-                waitingForSecondClick &&
-                polygonMoveMode == PolygonMoveMode::MoveWhole) {
-              handle_polygon_movement(pt, widget);
-              return;
-            }
+    for (int i = 0; i < (int)polygons.size(); ++i) {
+      if (polygons[i].vertices.size() == 4 &&
+          is_point_inside_polygon(polygons[i].vertices, pt)) {
 
-            if (event->button == 1 && (event->state & GDK_CONTROL_MASK)) {
+        polygonMoveMode = PolygonMoveMode::MoveWhole;
+        selectedPolygonIndex = i;
+        storedClick = pt;
+        waitingForSecondClick = true;
+        return;
+      }
+    }
+  }
 
-              for (int i = 0; i < (int)polygons.size(); ++i) {
-                if (polygons[i].vertices.size() == 4 &&
-                  is_point_inside_polygon(polygons[i].vertices, pt)) {
+  if (event->button == 1 && awaitingRectCornerMove) {
+    Polygon &rect = polygons[selectedRectIndex];
+    int opp = (selectedRectVertexIndex + 2) % 4;
+    cv::Point fixedPt = rect.vertices[opp];
+    cv::Point newPt = pt;
 
-                  polygonMoveMode      = PolygonMoveMode::MoveWhole;
-                  selectedPolygonIndex = i;
-                  storedClick          = pt;
-                  waitingForSecondClick= true;
-                  return;
-                }
-              }
-            }
+    std::vector<cv::Point> v = {{fixedPt.x, fixedPt.y},
+                                {fixedPt.x, newPt.y},
+                                {newPt.x, newPt.y},
+                                {newPt.x, fixedPt.y}};
+    rect.vertices = v;
+    awaitingRectCornerMove = false;
+    selectedRectIndex = -1;
+    selectedRectVertexIndex = -1;
+    redraw_shapes(widget);
+    return;
+  }
 
-            if (event->button == 1 && awaitingRectCornerMove) {
-                  Polygon &rect = polygons[selectedRectIndex];
-                  int opp = (selectedRectVertexIndex + 2) % 4;
-                  cv::Point fixedPt = rect.vertices[opp];
-                  cv::Point newPt   = pt;
+  if (event->button == 1 && awaitingRectEdgeMove) {
+    Polygon &rect = polygons[selectedRectIndex];
+    int x0 = rect.vertices[0].x, y0 = rect.vertices[0].y,
+        x1 = rect.vertices[2].x, y1 = rect.vertices[2].y,
+        e = selectedRectEdgeIndex;
+    switch (e) {
+    case 0:
+      x0 = pt.x;
+      break; // left
+    case 1:
+      y1 = pt.y;
+      break; // bottom
+    case 2:
+      x1 = pt.x;
+      break; // right
+    case 3:
+      y0 = pt.y;
+      break; // top
+    }
+    rect.vertices = {{x0, y0}, {x0, y1}, {x1, y1}, {x1, y0}};
+    awaitingRectEdgeMove = false;
+    selectedRectIndex = -1;
+    selectedRectEdgeIndex = -1;
+    redraw_shapes(widget);
+    return;
+  }
 
-                  std::vector<cv::Point> v = {
-                  { fixedPt.x, fixedPt.y },
-                  { fixedPt.x, newPt.y   },
-                  { newPt.x,   newPt.y   },
-                  { newPt.x,   fixedPt.y }
-                  };
-                  rect.vertices = v;
-                  awaitingRectCornerMove = false;
-                  selectedRectIndex      = -1;
-                  selectedRectVertexIndex= -1;
-                  redraw_shapes(widget);
-                  return;
-            }
+  if (event->button == 1) {
+    for (int i = 0; i < (int)polygons.size(); ++i) {
+      if (polygons[i].vertices.size() != 4)
+        continue;
+      int eidx;
+      if (is_point_near_edge_center(polygons[i].vertices, pt, eidx, thresh)) {
+        selectedRectIndex = i;
+        selectedRectEdgeIndex = eidx;
+        awaitingRectEdgeMove = true;
+        return;
+      }
+    }
+  }
 
+  if (event->button == 1) {
+    for (int i = 0; i < (int)polygons.size(); ++i) {
+      if (polygons[i].vertices.size() != 4)
+        continue;
+      int vidx;
+      if (is_point_near_vertex(polygons[i].vertices, pt, vidx, thresh)) {
+        selectedRectIndex = i;
+        selectedRectVertexIndex = vidx;
+        awaitingRectCornerMove = true;
+        return;
+      }
+    }
+  }
 
-            if (event->button == 1 && awaitingRectEdgeMove) {
-                      Polygon &rect = polygons[selectedRectIndex];
-                      int x0 = rect.vertices[0].x,
-                      y0 = rect.vertices[0].y,
-                      x1 = rect.vertices[2].x,
-                      y1 = rect.vertices[2].y,
-                      e  = selectedRectEdgeIndex;
-                      switch (e) {
-                      case 0: x0 = pt.x; break;  // left
-                      case 1: y1 = pt.y; break;  // bottom
-                      case 2: x1 = pt.x; break;  // right
-                      case 3: y0 = pt.y; break;  // top
-                      }
-                      rect.vertices = {{x0,y0},{x0,y1},{x1,y1},{x1,y0}};
-                      awaitingRectEdgeMove  = false;
-                      selectedRectIndex     = -1;
-                      selectedRectEdgeIndex = -1;
-                      redraw_shapes(widget);
-                      return;
-            }
+  if (event->button == 1) {
+    if (!awaitingRectSecond) {
+      rectCorner = pt;
+      awaitingRectSecond = true;
+    } else {
+      cv::Point a = rectCorner, b = pt;
+      polygons.push_back(Polygon{
+          {{a.x, a.y}, {a.x, b.y}, {b.x, b.y}, {b.x, a.y}}, 1, {255, 0, 0}});
 
+          if (choose_clipping) {
+            clippingndex     = polygons.size() - 1;
+            choose_clipping  = false;
+            std::cout << "Clipping rect is polygon #" 
+                      << clippingndex << "\n";
+        }
+      awaitingRectSecond = false;
+      redraw_shapes(widget);
+    }
+    return;
+  }
 
-            if (event->button == 1) {
-                  for (int i = 0; i < (int)polygons.size(); ++i) {
-                  if (polygons[i].vertices.size() != 4) continue;
-                  int eidx;
-                  if (is_point_near_edge_center(polygons[i].vertices, pt, eidx, thresh)) {
-                          selectedRectIndex     = i;
-                          selectedRectEdgeIndex = eidx;
-                          awaitingRectEdgeMove  = true;
-                          return;
-                  }
-                  }
-            }
+  if (event->button == 2) {
+    try_select_polygon(pt);
+    return;
+  }
 
-            if (event->button == 1) {
-            for (int i = 0; i < (int)polygons.size(); ++i) {
-            if (polygons[i].vertices.size() != 4) continue;
-            int vidx;
-            if (is_point_near_vertex(polygons[i].vertices, pt, vidx, thresh)) {
-            selectedRectIndex       = i;
-            selectedRectVertexIndex = vidx;
-            awaitingRectCornerMove  = true;
-            return;
-            }
-            }
-            }
-
-
-            if (event->button == 1) {
-            if (!awaitingRectSecond) {
-            rectCorner         = pt;
-            awaitingRectSecond = true;
-            } else {
-            cv::Point a = rectCorner, b = pt;
-            polygons.push_back( Polygon{
-            {{a.x,a.y},{a.x,b.y},{b.x,b.y},{b.x,a.y}},
-            1,
-            {255,0,0}
-            });
-            awaitingRectSecond = false;
-            redraw_shapes(widget);
-            }
-            return;
-            }
-
-
-            if (event->button == 2) {
-            try_select_polygon(pt);
-            return;
-            }
-
-
-            if (event->button == 3) {
-            try_delete_polygon(pt, widget);
-            return;
-            }
+  if (event->button == 3) {
+    try_delete_polygon(pt, widget);
+    return;
+  }
 }
-
 
 gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
   cv::Point pt = map_click_to_image(widget, event->x, event->y);
@@ -930,6 +999,21 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
     }
     return TRUE;
   }
+
+  if (choose_cliped
+    && event->button == 2)    // middle‐click
+{
+    try_select_polygon(pt);   // sets selectedPolygonIndex
+    if (selectedPolygonIndex >= 0) {
+        clipedIndex    = selectedPolygonIndex;
+        choose_cliped  = false;
+        std::cout << "Will clip polygon #"
+                  << clipedIndex
+                  << " against rect #"
+                  << clippingndex << "\n";
+    }
+    return TRUE;  // we handled it
+}
 
   switch (currentShape) {
   case ShapeType::Polygon:
@@ -993,6 +1077,62 @@ double extract_scroll_delta(GdkEventScroll *event) {
     delta = 1;
   }
   return delta;
+}
+
+static void on_clip_activate(GtkMenuItem *item, gpointer user_data)
+{
+  if (clippingndex < 0 || clipedIndex < 0) {
+    std::cerr << "Need both a clipping rect and a polygon selected!\n";
+    return;
+  }
+  std::cout<<"INSIDE THE ON_CLIP_ACTIVATE FUNCTION\n";
+  // grab the two polygons
+  const auto &rectPoly = polygons[clippingndex];
+  const auto &srcPoly  = polygons[clipedIndex];
+  Polygon resultPolyInside;    // we won't store it, just draw below
+
+  // get bounding box of rectPoly
+  int xmin = rectPoly.vertices[0].x, xmax = xmin;
+  int ymin = rectPoly.vertices[0].y, ymax = ymin;
+  for (auto &v : rectPoly.vertices) {
+    xmin = std::min(xmin, v.x);
+    xmax = std::max(xmax, v.x);
+    ymin = std::min(ymin, v.y);
+    ymax = std::max(ymax, v.y);
+  }
+
+  // colours
+  cv::Vec3b clrInside  = {  0, 255,   0};  // green
+  cv::Vec3b clrOutside = {255,   0,   0};  // red
+
+  // for each edge of the source polygon
+  for (size_t i = 0; i < srcPoly.vertices.size(); ++i) {
+    cv::Point P0 = srcPoly.vertices[i];
+    cv::Point P1 = srcPoly.vertices[(i+1) % srcPoly.vertices.size()];
+
+    cv::Point C0, C1;
+    bool accept = cohenSutherlandClip(P0, P1,
+                                      xmin, ymin, xmax, ymax,
+                                      C0, C1);
+
+    if (accept) {
+      // draw the inside fragment
+      drawLineDDA(image, C0, C1, clrInside, srcPoly.thickness);
+
+      // draw the two outside fragments (if non-degenerate)
+      if ((C0 != P0))
+        drawLineDDA(image, P0, C0, clrOutside, srcPoly.thickness);
+      if ((C1 != P1))
+        drawLineDDA(image, C1, P1, clrOutside, srcPoly.thickness);
+    } else {
+      // fully outside → draw whole edge in outside colour
+      drawLineDDA(image, P0, P1, clrOutside, srcPoly.thickness);
+    }
+  }
+
+  // force a redraw
+  gtk_widget_queue_draw(drawing_area);
+  std::cout<<"EXITING THE ON_CLIP_ACTIVATE FUNCTION\n";
 }
 
 gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
@@ -1270,8 +1410,6 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), shape_menu_root);
 
-
-
   // === CLIPING MENU ===
   GtkWidget *clip_menu_root = gtk_menu_item_new_with_label("Clipping");
   GtkWidget *clip_submenu = gtk_menu_new();
@@ -1287,9 +1425,8 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(clip_menu_root), clip_submenu);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), clip_menu_root);
 
-
   // === SIGNAL CONNECTIONS ===
-  {
+  
     g_signal_connect(line_item, "activate",
                      G_CALLBACK(+[](GtkWidget *, gpointer) {
                        currentShape = ShapeType::Line;
@@ -1364,44 +1501,37 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
                      }),
                      nullptr);
 
-    g_signal_connect(rect_item, "activate", 
-                      G_CALLBACK(+[](GtkWidget *, gpointer) {
-                      currentShape = ShapeType::Rectangle;
-                      selectedLineIndex = selectedCircleIndex = selectedPolygonIndex = -1;
-                      std::cout << "Shape changed to: Rectangle\n";
-                    }),
-                    nullptr);
+    g_signal_connect(
+        rect_item, "activate", G_CALLBACK(+[](GtkWidget *, gpointer) {
+          currentShape = ShapeType::Rectangle;
+          selectedLineIndex = selectedCircleIndex = selectedPolygonIndex = -1;
+          std::cout << "Shape changed to: Rectangle\n";
+        }),
+        nullptr);
 
     g_signal_connect(clip_item, "activate",
-                     G_CALLBACK(+[](GtkWidget *, gpointer) {
-                       std::cout << "Clipping activated.\n";
-                       choose_cliped = false;
-                       choose_clipping = false;
-                       clipedIndex = -1;
-                       clippingndex = -1;                         
-                     }),
+                      G_CALLBACK(on_clip_activate),
                      nullptr);
-    g_signal_connect(clipping_item, "activate",
-                     G_CALLBACK(+[](GtkWidget *, gpointer) {
-                       std::cout << "Chose clipping rectangle.\n";
-                       currentShape = ShapeType::Rectangle;
-                       choose_cliped = false;
-                       choose_clipping = true;
-                       clipedIndex = -1;
-                       clippingndex = -1;
-
-                     }),
-                     nullptr);
+                     g_signal_connect(clipping_item, "activate",
+                      G_CALLBACK(+[](GtkWidget*, gpointer){
+                        choose_clipping = true;
+                        choose_cliped   = false;
+                        clippingndex    = -1;
+                        clipedIndex     = -1;
+                        std::cout << "Now draw a rectangle for clipping window.\n";
+                      }),
+                      nullptr);
+                  
+                  // 2) user chooses which polygon will be clipped
     g_signal_connect(clipped_item, "activate",
-                     G_CALLBACK(+[](GtkWidget *, gpointer) {
-                       std::cout << "Chose clipped polygon.\n";
-                       currentShape = ShapeType::Polygon;
-                       choose_cliped = true;
-                       choose_clipping = false;
-                       clipedIndex = -1;                       
-                     }),
-                     nullptr);
-  }
+        G_CALLBACK(+[](GtkWidget*, gpointer){
+          choose_cliped   = true;
+          choose_clipping = false;
+          clipedIndex     = -1;
+          std::cout << "Now middle-click the polygon you wish to clip.\n";
+        }),
+        nullptr);
+  
   return menu_bar;
 }
 
