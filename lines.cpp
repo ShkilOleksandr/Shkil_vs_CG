@@ -5,7 +5,7 @@
 #include <opencv2/opencv.hpp>
 #include <vector>
 
-enum class ShapeType { Line, Circle, Polygon, Rectangle };
+enum class ShapeType { Line, Circle, Polygon, Rectangle};
 ShapeType currentShape = ShapeType::Line;
 GtkWidget *shape_menu;
 
@@ -37,7 +37,7 @@ enum class EditMode { None, MoveStart, MoveEnd };
 
 std::vector<Line> lines;
 std::vector<Circle> circles;
-std::vector<Polygon> polygons; // New vector
+std::vector<Polygon> polygons; 
 
 cv::Mat image;
 GtkWidget *drawing_area;
@@ -77,6 +77,14 @@ static int selectedRectVertexIndex = -1;
 static bool awaitingRectCornerMove = false;
 static bool awaitingRectEdgeMove     = false;
 static int  selectedRectEdgeIndex    = -1;
+
+
+//  Clipping
+
+static bool choose_clipping = false;
+static bool choose_cliped = false;
+static int clipedIndex = -1;
+static int clippingndex = -1;
 
 void drawCircleMidpoint(cv::Mat &img, cv::Point center, int radius,
                         const cv::Vec3b &color) {
@@ -786,129 +794,129 @@ void handle_rectangle_click(cv::Point pt,
   GdkEventButton *event,
   GtkWidget    *widget)
 {
-  const int thresh = 30;
+          const int thresh = 30;
 
 
-    if (event->button == 1 &&
-          waitingForSecondClick &&
-          polygonMoveMode == PolygonMoveMode::MoveWhole) {
-        handle_polygon_movement(pt, widget);
-        return;
-      }
+          if (event->button == 1 &&
+                waitingForSecondClick &&
+                polygonMoveMode == PolygonMoveMode::MoveWhole) {
+              handle_polygon_movement(pt, widget);
+              return;
+            }
 
-  if (event->button == 1 && (event->state & GDK_CONTROL_MASK)) {
+            if (event->button == 1 && (event->state & GDK_CONTROL_MASK)) {
 
-    for (int i = 0; i < (int)polygons.size(); ++i) {
-      if (polygons[i].vertices.size() == 4 &&
-        is_point_inside_polygon(polygons[i].vertices, pt)) {
+              for (int i = 0; i < (int)polygons.size(); ++i) {
+                if (polygons[i].vertices.size() == 4 &&
+                  is_point_inside_polygon(polygons[i].vertices, pt)) {
 
-        polygonMoveMode      = PolygonMoveMode::MoveWhole;
-        selectedPolygonIndex = i;
-        storedClick          = pt;
-        waitingForSecondClick= true;
-        return;
-      }
-    }
-  }
+                  polygonMoveMode      = PolygonMoveMode::MoveWhole;
+                  selectedPolygonIndex = i;
+                  storedClick          = pt;
+                  waitingForSecondClick= true;
+                  return;
+                }
+              }
+            }
 
-  if (event->button == 1 && awaitingRectCornerMove) {
-  Polygon &rect = polygons[selectedRectIndex];
-  int opp = (selectedRectVertexIndex + 2) % 4;
-  cv::Point fixedPt = rect.vertices[opp];
-  cv::Point newPt   = pt;
+            if (event->button == 1 && awaitingRectCornerMove) {
+                  Polygon &rect = polygons[selectedRectIndex];
+                  int opp = (selectedRectVertexIndex + 2) % 4;
+                  cv::Point fixedPt = rect.vertices[opp];
+                  cv::Point newPt   = pt;
 
-  std::vector<cv::Point> v = {
-  { fixedPt.x, fixedPt.y },
-  { fixedPt.x, newPt.y   },
-  { newPt.x,   newPt.y   },
-  { newPt.x,   fixedPt.y }
-  };
-  rect.vertices = v;
-  awaitingRectCornerMove = false;
-  selectedRectIndex      = -1;
-  selectedRectVertexIndex= -1;
-  redraw_shapes(widget);
-  return;
-  }
-
-
-  if (event->button == 1 && awaitingRectEdgeMove) {
-  Polygon &rect = polygons[selectedRectIndex];
-  int x0 = rect.vertices[0].x,
-  y0 = rect.vertices[0].y,
-  x1 = rect.vertices[2].x,
-  y1 = rect.vertices[2].y,
-  e  = selectedRectEdgeIndex;
-  switch (e) {
-  case 0: x0 = pt.x; break;  // left
-  case 1: y1 = pt.y; break;  // bottom
-  case 2: x1 = pt.x; break;  // right
-  case 3: y0 = pt.y; break;  // top
-  }
-  rect.vertices = {{x0,y0},{x0,y1},{x1,y1},{x1,y0}};
-  awaitingRectEdgeMove  = false;
-  selectedRectIndex     = -1;
-  selectedRectEdgeIndex = -1;
-  redraw_shapes(widget);
-  return;
-  }
+                  std::vector<cv::Point> v = {
+                  { fixedPt.x, fixedPt.y },
+                  { fixedPt.x, newPt.y   },
+                  { newPt.x,   newPt.y   },
+                  { newPt.x,   fixedPt.y }
+                  };
+                  rect.vertices = v;
+                  awaitingRectCornerMove = false;
+                  selectedRectIndex      = -1;
+                  selectedRectVertexIndex= -1;
+                  redraw_shapes(widget);
+                  return;
+            }
 
 
-  if (event->button == 1) {
-  for (int i = 0; i < (int)polygons.size(); ++i) {
-  if (polygons[i].vertices.size() != 4) continue;
-  int eidx;
-  if (is_point_near_edge_center(polygons[i].vertices, pt, eidx, thresh)) {
-  selectedRectIndex     = i;
-  selectedRectEdgeIndex = eidx;
-  awaitingRectEdgeMove  = true;
-  return;
-  }
-  }
-  }
-
-  if (event->button == 1) {
-  for (int i = 0; i < (int)polygons.size(); ++i) {
-  if (polygons[i].vertices.size() != 4) continue;
-  int vidx;
-  if (is_point_near_vertex(polygons[i].vertices, pt, vidx, thresh)) {
-  selectedRectIndex       = i;
-  selectedRectVertexIndex = vidx;
-  awaitingRectCornerMove  = true;
-  return;
-  }
-  }
-  }
+            if (event->button == 1 && awaitingRectEdgeMove) {
+                      Polygon &rect = polygons[selectedRectIndex];
+                      int x0 = rect.vertices[0].x,
+                      y0 = rect.vertices[0].y,
+                      x1 = rect.vertices[2].x,
+                      y1 = rect.vertices[2].y,
+                      e  = selectedRectEdgeIndex;
+                      switch (e) {
+                      case 0: x0 = pt.x; break;  // left
+                      case 1: y1 = pt.y; break;  // bottom
+                      case 2: x1 = pt.x; break;  // right
+                      case 3: y0 = pt.y; break;  // top
+                      }
+                      rect.vertices = {{x0,y0},{x0,y1},{x1,y1},{x1,y0}};
+                      awaitingRectEdgeMove  = false;
+                      selectedRectIndex     = -1;
+                      selectedRectEdgeIndex = -1;
+                      redraw_shapes(widget);
+                      return;
+            }
 
 
-  if (event->button == 1) {
-  if (!awaitingRectSecond) {
-  rectCorner         = pt;
-  awaitingRectSecond = true;
-  } else {
-  cv::Point a = rectCorner, b = pt;
-  polygons.push_back( Polygon{
-  {{a.x,a.y},{a.x,b.y},{b.x,b.y},{b.x,a.y}},
-  1,
-  {255,0,0}
-  });
-  awaitingRectSecond = false;
-  redraw_shapes(widget);
-  }
-  return;
-  }
+            if (event->button == 1) {
+                  for (int i = 0; i < (int)polygons.size(); ++i) {
+                  if (polygons[i].vertices.size() != 4) continue;
+                  int eidx;
+                  if (is_point_near_edge_center(polygons[i].vertices, pt, eidx, thresh)) {
+                          selectedRectIndex     = i;
+                          selectedRectEdgeIndex = eidx;
+                          awaitingRectEdgeMove  = true;
+                          return;
+                  }
+                  }
+            }
+
+            if (event->button == 1) {
+            for (int i = 0; i < (int)polygons.size(); ++i) {
+            if (polygons[i].vertices.size() != 4) continue;
+            int vidx;
+            if (is_point_near_vertex(polygons[i].vertices, pt, vidx, thresh)) {
+            selectedRectIndex       = i;
+            selectedRectVertexIndex = vidx;
+            awaitingRectCornerMove  = true;
+            return;
+            }
+            }
+            }
 
 
-  if (event->button == 2) {
-  try_select_polygon(pt);
-  return;
-  }
+            if (event->button == 1) {
+            if (!awaitingRectSecond) {
+            rectCorner         = pt;
+            awaitingRectSecond = true;
+            } else {
+            cv::Point a = rectCorner, b = pt;
+            polygons.push_back( Polygon{
+            {{a.x,a.y},{a.x,b.y},{b.x,b.y},{b.x,a.y}},
+            1,
+            {255,0,0}
+            });
+            awaitingRectSecond = false;
+            redraw_shapes(widget);
+            }
+            return;
+            }
 
 
-  if (event->button == 3) {
-  try_delete_polygon(pt, widget);
-  return;
-  }
+            if (event->button == 2) {
+            try_select_polygon(pt);
+            return;
+            }
+
+
+            if (event->button == 3) {
+            try_delete_polygon(pt, widget);
+            return;
+            }
 }
 
 
@@ -1262,6 +1270,24 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(shape_menu_root), shape_submenu);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), shape_menu_root);
 
+
+
+  // === CLIPING MENU ===
+  GtkWidget *clip_menu_root = gtk_menu_item_new_with_label("Clipping");
+  GtkWidget *clip_submenu = gtk_menu_new();
+
+  GtkWidget *clipped_item = gtk_menu_item_new_with_label("Clipped");
+  GtkWidget *clipping_item = gtk_menu_item_new_with_label("Clipping");
+  GtkWidget *clip_item = gtk_menu_item_new_with_label("Clip");
+
+  gtk_menu_shell_append(GTK_MENU_SHELL(clip_submenu), clipped_item);
+  gtk_menu_shell_append(GTK_MENU_SHELL(clip_submenu), clipping_item);
+  gtk_menu_shell_append(GTK_MENU_SHELL(clip_submenu), clip_item);
+
+  gtk_menu_item_set_submenu(GTK_MENU_ITEM(clip_menu_root), clip_submenu);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), clip_menu_root);
+
+
   // === SIGNAL CONNECTIONS ===
   {
     g_signal_connect(line_item, "activate",
@@ -1337,13 +1363,44 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
                        }
                      }),
                      nullptr);
-    g_signal_connect(
-        rect_item, "activate", G_CALLBACK(+[](GtkWidget *, gpointer) {
-          currentShape = ShapeType::Rectangle;
-          selectedLineIndex = selectedCircleIndex = selectedPolygonIndex = -1;
-          std::cout << "Shape changed to: Rectangle\n";
-        }),
-        nullptr);
+
+    g_signal_connect(rect_item, "activate", 
+                      G_CALLBACK(+[](GtkWidget *, gpointer) {
+                      currentShape = ShapeType::Rectangle;
+                      selectedLineIndex = selectedCircleIndex = selectedPolygonIndex = -1;
+                      std::cout << "Shape changed to: Rectangle\n";
+                    }),
+                    nullptr);
+
+    g_signal_connect(clip_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       std::cout << "Clipping activated.\n";
+                       choose_cliped = false;
+                       choose_clipping = false;
+                       clipedIndex = -1;
+                       clippingndex = -1;                         
+                     }),
+                     nullptr);
+    g_signal_connect(clipping_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       std::cout << "Chose clipping rectangle.\n";
+                       currentShape = ShapeType::Rectangle;
+                       choose_cliped = false;
+                       choose_clipping = true;
+                       clipedIndex = -1;
+                       clippingndex = -1;
+
+                     }),
+                     nullptr);
+    g_signal_connect(clipped_item, "activate",
+                     G_CALLBACK(+[](GtkWidget *, gpointer) {
+                       std::cout << "Chose clipped polygon.\n";
+                       currentShape = ShapeType::Polygon;
+                       choose_cliped = true;
+                       choose_clipping = false;
+                       clipedIndex = -1;                       
+                     }),
+                     nullptr);
   }
   return menu_bar;
 }
