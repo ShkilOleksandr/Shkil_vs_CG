@@ -282,75 +282,53 @@ inline float smoothstep(float edge0, float edge1, float x) {
 void drawLineThickPixelCopyAA(cv::Mat &img, cv::Point p0, cv::Point p1,
                               const cv::Vec3b &color, int thickness = 1,
                               bool applyAA = false) {
-  if (!applyAA) {
-    float dx = p1.x - p0.x;
-    float dy = p1.y - p0.y;
-    int steps = std::max(std::abs(dx), std::abs(dy));
-    float xInc = dx / static_cast<float>(steps);
-    float yInc = dy / static_cast<float>(steps);
-    float x = p0.x;
-    float y = p0.y;
-    int radius = thickness / 2;
-    for (int i = 0; i <= steps; ++i) {
-      int cx = std::round(x);
-      int cy = std::round(y);
-      for (int j = -radius; j <= radius; ++j) {
-        for (int k = -radius; k <= radius; ++k) {
-          setPixel(img, cx + k, cy + j, color);
-        }
-      }
-      x += xInc;
-      y += yInc;
-    }
-    return;
-  }
-
-  cv::Point2f dir = p1 - p0;
-  float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-  if (len == 0)
-    return;
+  cv::Point2f dir = cv::Point2f(p1) - cv::Point2f(p0);
+  float len = std::hypot(dir.x, dir.y);
+  if (len == 0.0f)
+      return;
   cv::Point2f ud = dir / len;
 
-  cv::Point2f perp(-ud.y, ud.x);
+  float radius     = thickness * 0.5f;
+  float blendWidth = applyAA ? 1.0f : 0.0f;
 
-  float radius = thickness / 2.0f;
-  float blendWidth = 1.0f;
-
-  std::vector<cv::Point> pts = {p0, p1};
-  cv::Rect bbox = cv::boundingRect(pts);
-  bbox.x -= thickness;
-  bbox.y -= thickness;
+  std::vector<cv::Point>  endpts = { p0, p1 };
+  cv::Rect bbox = cv::boundingRect(endpts);
+  bbox.x     -= thickness;
+  bbox.y     -= thickness;
   bbox.width += 2 * thickness;
-  bbox.height += 2 * thickness;
+  bbox.height+= 2 * thickness;
 
   for (int y = bbox.y; y < bbox.y + bbox.height; ++y) {
-    for (int x = bbox.x; x < bbox.x + bbox.width; ++x) {
+      for (int x = bbox.x; x < bbox.x + bbox.width; ++x) {
+          cv::Point2f pt(x + 0.5f, y + 0.5f);
 
-      cv::Point2f pt(x + 0.5f, y + 0.5f);
+          cv::Point2f v = pt - cv::Point2f(p0);
+          float t = v.dot(ud);
+          t = std::clamp(t, 0.0f, len);
+          cv::Point2f proj = cv::Point2f(p0) + ud * t;
 
-      cv::Point2f v = pt - cv::Point2f(p0);
+          float d = cv::norm(pt - proj);
 
-      float t = v.dot(ud);
+          float alpha;
+          if (d <= radius) {
+              alpha = 1.0f;                      
+          }
+          else if (applyAA && d <= radius + blendWidth) {
 
-      if (t < 0.0f)
-        t = 0.0f;
-      if (t > len)
-        t = len;
-      cv::Point2f proj = cv::Point2f(p0) + t * ud;
+              alpha = 1.0f - smoothstep(radius, radius + blendWidth, d);
+          }
+          else {
+              alpha = 0.0f;                       
+          }
 
-      float d = cv::norm(pt - proj);
+          if (alpha >= 1.0f) {
 
-      float alpha = 0.0f;
-      if (d <= radius)
-        alpha = 1.0f;
-      else if (d <= radius + blendWidth)
-        alpha = 1.0f - smoothstep(radius, radius + blendWidth, d);
-      else
-        alpha = 0.0f;
-
-      if (alpha > 0.0f)
-        plot(img, x, y, alpha, color);
-    }
+              img.at<cv::Vec3b>(y, x) = color;
+          }
+          else if (alpha > 0.0f) {
+              plot(img, x, y, alpha, color);
+          }
+      }
   }
 }
 
@@ -627,7 +605,6 @@ void handle_polygon_movement(cv::Point pt, GtkWidget *widget) {
     return;
   }
 
-  // Reset state after move
   polygonMoveMode = PolygonMoveMode::None;
   selectedPolygonIndex = -1;
   selectedVertexIndex = -1;
@@ -830,7 +807,6 @@ void handle_line_click(cv::Point pt, GdkEventButton *event, GtkWidget *widget,
       selectedLineIndex = -1;
       redraw_shapes(widget);
     } else if (try_select_line_endpoint(pt, threshold)) {
-      // selectedLineIndex & editMode are set
     } else {
       if (!awaitingSecondClick) {
         lineStart = pt;
@@ -1034,9 +1010,9 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
   }
 
   if (choose_cliped
-    && event->button == 2)    // middle‐click
+    && event->button == 2)    
 {
-    try_select_polygon(pt);   // sets selectedPolygonIndex
+    try_select_polygon(pt);  
     if (selectedPolygonIndex >= 0) {
         clipedIndex    = selectedPolygonIndex;
         choose_cliped  = false;
@@ -1045,7 +1021,7 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
                   << " against rect #"
                   << clippingndex << "\n";
     }
-    return TRUE;  // we handled it
+    return TRUE;  
 }
 
   switch (currentShape) {
@@ -1119,8 +1095,8 @@ static void on_clip_activate(GtkMenuItem *item, gpointer user_data)
     return;
   }
 
-  if (!isRectangleCW(polygons[clippingndex].vertices)) {
-    std::cout << "Clipping polygon must be a rectangle!\n";
+  if (!isRectangleCW(polygons[clippingndex].vertices) || polygons[clipedIndex].thickness != 1) {
+    std::cout << "The polygons must be elidgible for clipping!\n";
     return;
   }
 
@@ -1249,7 +1225,7 @@ void clear_all_shapes(GtkWidget *widget) {
 cv::Vec3b open_color_chooser(GtkWidget *parent) {
   GtkWidget *dialog =
       gtk_color_chooser_dialog_new("Choose Color", GTK_WINDOW(parent));
-  cv::Vec3b result{255, 255, 255}; // fallback
+  cv::Vec3b result{255, 255, 255}; 
 
   if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
     GdkRGBA gdk_color;
