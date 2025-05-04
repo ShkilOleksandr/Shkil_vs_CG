@@ -113,7 +113,7 @@ bool cohenSutherlandClip(cv::Point p0, cv::Point p1,
       if ((code0 | code1) == 0) {
           // both inside
           accept = true;
-          out0 = p0;  out1 = p1;
+          out0 = p0;  out1 = p1; 
           break;
       }
       else if (code0 & code1) {
@@ -858,6 +858,39 @@ void handle_line_click(cv::Point pt, GdkEventButton *event, GtkWidget *widget,
     try_delete_line(pt, widget, threshold);
   }
 }
+bool isRectangleCW(const std::vector<cv::Point>& pts, double eps = 1e-6)
+{
+    if (pts.size() != 4)
+        return false;
+
+    const cv::Point2f &BL = pts[0],
+                      &BR = pts[1],
+                      &TR = pts[2],
+                      &TL = pts[3];
+
+    cv::Point2f v0 = BR - BL;  // bottom edge
+    cv::Point2f v1 = TR - BR;  // right edge
+    cv::Point2f v2 = TL - TR;  // top edge
+    cv::Point2f v3 = BL - TL;  // left edge
+
+    if (std::abs(v0.dot(v1)) > eps) return false;
+    if (std::abs(v1.dot(v2)) > eps) return false;
+    if (std::abs(v2.dot(v3)) > eps) return false;
+    if (std::abs(v3.dot(v0)) > eps) return false;
+
+    double Lbottom = cv::norm(v0);
+    double Lright  = cv::norm(v1);
+    double Ltop    = cv::norm(v2);
+    double Lleft   = cv::norm(v3);
+
+    if (std::abs(Lbottom - Ltop) > eps)  return false;
+    if (std::abs(Lright  - Lleft) > eps) return false;
+
+    if (Lbottom < eps || Lright < eps)
+        return false;
+
+    return true;
+}
 
 void handle_rectangle_click(cv::Point pt, GdkEventButton *event,
                             GtkWidget *widget) {
@@ -1085,13 +1118,16 @@ static void on_clip_activate(GtkMenuItem *item, gpointer user_data)
     std::cerr << "Need both a clipping rect and a polygon selected!\n";
     return;
   }
-  std::cout<<"INSIDE THE ON_CLIP_ACTIVATE FUNCTION\n";
-  // grab the two polygons
+
+  if (!isRectangleCW(polygons[clippingndex].vertices)) {
+    std::cout << "Clipping polygon must be a rectangle!\n";
+    return;
+  }
+
   const auto &rectPoly = polygons[clippingndex];
   const auto &srcPoly  = polygons[clipedIndex];
-  Polygon resultPolyInside;    // we won't store it, just draw below
+  Polygon resultPolyInside;    
 
-  // get bounding box of rectPoly
   int xmin = rectPoly.vertices[0].x, xmax = xmin;
   int ymin = rectPoly.vertices[0].y, ymax = ymin;
   for (auto &v : rectPoly.vertices) {
@@ -1102,10 +1138,10 @@ static void on_clip_activate(GtkMenuItem *item, gpointer user_data)
   }
 
   // colours
-  cv::Vec3b clrInside  = {  0, 255,   0};  // green
-  cv::Vec3b clrOutside = {255,   0,   0};  // red
+  cv::Vec3b clrOutside  = srcPoly.color; 
+  cv::Vec3b white = {255, 255, 255};
+  cv::Vec3b clrInside = white - clrOutside; 
 
-  // for each edge of the source polygon
   for (size_t i = 0; i < srcPoly.vertices.size(); ++i) {
     cv::Point P0 = srcPoly.vertices[i];
     cv::Point P1 = srcPoly.vertices[(i+1) % srcPoly.vertices.size()];
@@ -1116,23 +1152,25 @@ static void on_clip_activate(GtkMenuItem *item, gpointer user_data)
                                       C0, C1);
 
     if (accept) {
-      // draw the inside fragment
-      drawLineDDA(image, C0, C1, clrInside, srcPoly.thickness);
+      
+      drawLineDDA(image, C0, C1, clrInside, 2*srcPoly.thickness);
 
-      // draw the two outside fragments (if non-degenerate)
-      if ((C0 != P0))
-        drawLineDDA(image, P0, C0, clrOutside, srcPoly.thickness);
-      if ((C1 != P1))
-        drawLineDDA(image, C1, P1, clrOutside, srcPoly.thickness);
+      if ((C0 != P0)){
+        
+        drawLineDDA(image, P0, C0, clrOutside, 2*srcPoly.thickness);
+      }
+
+      if ((C1 != P1)){
+        
+        drawLineDDA(image, C1, P1, clrOutside, 2*srcPoly.thickness);
+      }
     } else {
-      // fully outside → draw whole edge in outside colour
-      drawLineDDA(image, P0, P1, clrOutside, srcPoly.thickness);
+
+      drawLineDDA(image, P0, P1, clrOutside, 2*srcPoly.thickness);
     }
   }
 
-  // force a redraw
   gtk_widget_queue_draw(drawing_area);
-  std::cout<<"EXITING THE ON_CLIP_ACTIVATE FUNCTION\n";
 }
 
 gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
@@ -1512,7 +1550,7 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
     g_signal_connect(clip_item, "activate",
                       G_CALLBACK(on_clip_activate),
                      nullptr);
-                     g_signal_connect(clipping_item, "activate",
+    g_signal_connect(clipping_item, "activate",
                       G_CALLBACK(+[](GtkWidget*, gpointer){
                         choose_clipping = true;
                         choose_cliped   = false;
@@ -1522,7 +1560,6 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
                       }),
                       nullptr);
                   
-                  // 2) user chooses which polygon will be clipped
     g_signal_connect(clipped_item, "activate",
         G_CALLBACK(+[](GtkWidget*, gpointer){
           choose_cliped   = true;
