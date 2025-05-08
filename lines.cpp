@@ -27,6 +27,9 @@ struct Polygon {
   int thickness;
   cv::Vec3b color = {255, 0, 0}; // default blue
   bool filled = false;
+
+  bool useImageFill = false;
+  cv::Mat fillImage;
 };
 
 struct Bezier {
@@ -100,6 +103,91 @@ int computeOutCode(const cv::Point &p, int xmin, int ymin, int xmax, int ymax) {
   if      (p.y < ymin) code |= CS_BOTTOM;
   else if (p.y > ymax) code |= CS_TOP;
   return code;
+}
+
+struct Edge {
+  int    yMax;      // maximum y for this edge (exclusive)
+  float  x;         // current x intersection with scanline
+  float  invSlope;  // Δx / Δy
+};
+
+void textureFillPolygon(cv::Mat &img, const Polygon &poly) {
+  // sanity checks
+  if (poly.vertices.size() < 3 || poly.fillImage.empty()) return;
+
+  // 1) find bounding‐box of poly (for texture mapping)
+  int xMin = INT_MAX, xMax = INT_MIN;
+  int yMin = INT_MAX, yMax = INT_MIN;
+  for (auto &v : poly.vertices) {
+      xMin = std::min(xMin, v.x);
+      xMax = std::max(xMax, v.x);
+      yMin = std::min(yMin, v.y);
+      yMax = std::max(yMax, v.y);
+  }
+  // clamp to image
+  yMin = std::max(yMin, 0);
+  yMax = std::min(yMax, img.rows - 1);
+
+  // 2) build Edge Table indexed by scanline y
+  std::vector<std::vector<Edge>> edgeTable(yMax + 1);
+  int N = poly.vertices.size();
+  for (int i = 0; i < N; ++i) {
+      cv::Point p1 = poly.vertices[i];
+      cv::Point p2 = poly.vertices[(i + 1) % N];
+      // ignore horizontal edges
+      if (p1.y == p2.y) continue;
+      // determine edge direction
+      int y0 = p1.y, y1 = p2.y;
+      float x0 = p1.x, x1 = p2.x;
+      if (y0 > y1) {
+          std::swap(y0, y1);
+          std::swap(x0, x1);
+      }
+      Edge e;
+      e.yMax     = y1;                 
+      e.x        = x0;                 
+      e.invSlope = (x1 - x0) / float(y1 - y0);
+      if (y0 >= 0 && y0 <= yMax)
+          edgeTable[y0].push_back(e);
+  }
+
+  // 3) scanlines
+  std::vector<Edge> active;
+  int texW = poly.fillImage.cols,
+      texH = poly.fillImage.rows;
+
+  for (int y = yMin; y <= yMax; ++y) {
+      // add new edges
+      for (auto &e : edgeTable[y]) active.push_back(e);
+
+      // remove edges where we hit yMax
+      active.erase(
+          std::remove_if(active.begin(), active.end(),
+              [y](const Edge &e){ return e.yMax <= y; }),
+          active.end()
+      );
+
+      // sort by current x
+      std::sort(active.begin(), active.end(),
+                [](const Edge &a, const Edge &b){ return a.x < b.x; });
+
+      // fill between pairs of intersections
+      for (size_t i = 0; i + 1 < active.size(); i += 2) {
+          int xStart = std::max(int(std::ceil(active[i].x)),   0);
+          int xEnd   = std::min(int(std::floor(active[i+1].x)), img.cols - 1);
+          for (int x = xStart; x <= xEnd; ++x) {
+              // tile the texture over the bounding box
+              int u = ( (x - xMin) % texW + texW ) % texW;
+              int v = ( (y - yMin) % texH + texH ) % texH;
+              img.at<cv::Vec3b>(y, x) = poly.fillImage.at<cv::Vec3b>(v, u);
+          }
+      }
+
+      // advance all edges’ x for the next scanline
+      for (auto &e : active) {
+          e.x += e.invSlope;
+      }
+  }
 }
 
 bool cohenSutherlandClip(cv::Point p0, cv::Point p1,
@@ -444,9 +532,12 @@ void fillPolygon(cv::Mat &img,
 void drawPolygon(cv::Mat &img, const Polygon &poly, const cv::Vec3b &color) {
   if (poly.vertices.size() < 2) return;
 
-  if(poly.filled)
+  if(poly.useImageFill) {
+    textureFillPolygon(img, poly);
+  } else if (poly.filled) {
     fillPolygon(img, poly.vertices, color);
-
+  }
+  
   for (size_t i = 0; i < poly.vertices.size(); ++i) {
       cv::Point p1 = poly.vertices[i];
       cv::Point p2 = poly.vertices[(i + 1) % poly.vertices.size()];
@@ -1530,9 +1621,11 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
 
   GtkWidget *fill_item = gtk_menu_item_new_with_label("Fill");
   GtkWidget *unfill_item = gtk_menu_item_new_with_label("Unfill");
+  GtkWidget *loadImgFill_item = gtk_menu_item_new_with_label("Load Image Fill");
 
   gtk_menu_shell_append(GTK_MENU_SHELL(fill_submenu), fill_item);
   gtk_menu_shell_append(GTK_MENU_SHELL(fill_submenu), unfill_item);
+  gtk_menu_shell_append(GTK_MENU_SHELL(fill_submenu), loadImgFill_item);
 
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(fill_menu_root), fill_submenu);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), fill_menu_root);
@@ -1658,6 +1751,24 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
           }
         }),
         nullptr);
+    g_signal_connect(loadImgFill_item, "activate",
+          G_CALLBACK(+[](GtkWidget *w, gpointer) {
+            if (selectedPolygonIndex<0) return;
+            GtkWidget* dlg = gtk_file_chooser_dialog_new(
+                "Pick Fill Image", GTK_WINDOW(w),
+                GTK_FILE_CHOOSER_ACTION_OPEN,
+                "_Cancel", GTK_RESPONSE_CANCEL,
+                "_Open",   GTK_RESPONSE_ACCEPT,
+                NULL);
+            if (gtk_dialog_run(GTK_DIALOG(dlg))==GTK_RESPONSE_ACCEPT) {
+              char *fname = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+              polygons[selectedPolygonIndex].fillImage = cv::imread(fname, cv::IMREAD_COLOR);
+              polygons[selectedPolygonIndex].useImageFill = true;
+              g_free(fname);
+              redraw_shapes(drawing_area);
+            }
+            gtk_widget_destroy(dlg);
+          }), nullptr);
   
   return menu_bar;
 }
