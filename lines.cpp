@@ -26,6 +26,7 @@ struct Polygon {
   std::vector<cv::Point> vertices;
   int thickness;
   cv::Vec3b color = {255, 0, 0}; // default blue
+  bool filled = false;
 };
 
 struct Bezier {
@@ -361,7 +362,7 @@ void draw_in_progress_polygon(cv::Mat &img) {
   if (currentPolygonVertices.size() < 2)
     return;
   if (currentPolygonVertices.size() == 1) {
-    // draw a small filled circle of radius 3 in yellow
+
     drawCircleMidpoint(img, currentPolygonVertices[0], 3,
                        cv::Vec3b(0, 200, 200));
     return;
@@ -372,13 +373,84 @@ void draw_in_progress_polygon(cv::Mat &img) {
   }
 }
 
+struct EdgeEntry {
+  int ymax;        
+  float x;        
+  float invSlope; 
+};
+
+void fillPolygon(cv::Mat &img,
+               const std::vector<cv::Point> &vertices,
+               const cv::Vec3b &fillColor)
+{
+  int n = vertices.size();
+  if (n < 3) return;
+
+  int height = img.rows;
+  int ymin = INT_MAX, ymax = INT_MIN;
+  for (auto &p : vertices) {
+      ymin = std::min(ymin, p.y);
+      ymax = std::max(ymax, p.y);
+  }
+  ymin = std::clamp(ymin, 0, height - 1);
+  ymax = std::clamp(ymax, 0, height - 1);
+
+  std::vector<std::vector<EdgeEntry>> ET(height);
+  for (int i = 0; i < n; ++i) {
+      cv::Point p1 = vertices[i];
+      cv::Point p2 = vertices[(i + 1) % n];
+      if (p1.y == p2.y) continue;      
+
+      if (p1.y > p2.y) std::swap(p1, p2);
+
+      int yMin = p1.y;
+      int yMax = p2.y;
+      float xAtYmin = p1.x;
+      float invSlope = float(p2.x - p1.x) / float(p2.y - p1.y);
+
+      if (yMin >= 0 && yMin < height)
+          ET[yMin].push_back({ yMax, xAtYmin, invSlope });
+  }
+
+  std::vector<EdgeEntry> AET;
+  for (int y = ymin; y <= ymax; ++y) {
+
+      for (auto &e : ET[y]) AET.push_back(e);
+
+      AET.erase(std::remove_if(AET.begin(), AET.end(),
+                               [y](const EdgeEntry &e){ return e.ymax == y; }),
+                AET.end());
+
+      std::sort(AET.begin(), AET.end(),
+                [](const EdgeEntry &a, const EdgeEntry &b){
+                    return a.x < b.x;
+                });
+
+      for (int i = 0; i + 1 < (int)AET.size(); i += 2) {
+          int xStart = std::ceil(AET[i].x);
+          int xEnd   = std::floor(AET[i+1].x);
+          xStart = std::clamp(xStart, 0, img.cols - 1);
+          xEnd   = std::clamp(xEnd,   0, img.cols - 1);
+          for (int x = xStart; x <= xEnd; ++x) {
+              img.at<cv::Vec3b>(y, x) = fillColor;
+          }
+      }
+
+      for (auto &e : AET)
+          e.x += e.invSlope;
+  }
+}
+
 void drawPolygon(cv::Mat &img, const Polygon &poly, const cv::Vec3b &color) {
-  if (poly.vertices.size() < 2)
-    return;
+  if (poly.vertices.size() < 2) return;
+
+  if(poly.filled)
+    fillPolygon(img, poly.vertices, color);
+
   for (size_t i = 0; i < poly.vertices.size(); ++i) {
-    cv::Point p1 = poly.vertices[i];
-    cv::Point p2 = poly.vertices[(i + 1) % poly.vertices.size()];
-    drawLineDDA(img, p1, p2, color, poly.thickness);
+      cv::Point p1 = poly.vertices[i];
+      cv::Point p2 = poly.vertices[(i + 1) % poly.vertices.size()];
+      drawLineDDA(img, p1, p2, color, poly.thickness);
   }
 }
 
@@ -413,7 +485,12 @@ void redraw_shapes(GtkWidget *widget) {
   for (const auto &circle : circles)
     drawCircleMidpoint(image, circle.center, circle.radius, circle.color);
   for (const auto &poly : polygons)
-    drawPolygon(image, poly, poly.color);
+    {
+      float thickness = poly.thickness;
+      if(clippingndex == -1)
+        thickness = 1;
+      drawPolygon(image, poly, poly.color);
+    }
 
   for (auto &bz : beziers)
     drawBezier(image, bz);
@@ -1290,6 +1367,7 @@ void save_shapes_to_file(GtkWidget *parent) {
         out << " " << v.x << " " << v.y;
       out << " " << (int)poly.color[0] << " " << (int)poly.color[1] << " "
           << (int)poly.color[2];
+      out << " " << (int)poly.filled;
       out << "\n";
     }
 
@@ -1341,6 +1419,7 @@ void load_shapes_from_file(GtkWidget *parent) {
       } else if (type == "CIRCLE") {
         Circle c;
         int r, g, b;
+        bool filled;
         in >> c.center.x >> c.center.y >> c.radius >> r >> g >> b;
         c.color = cv::Vec3b(b, g, r);
         circles.push_back(c);
@@ -1355,6 +1434,12 @@ void load_shapes_from_file(GtkWidget *parent) {
         }
         in >> r >> g >> b;
         p.color = cv::Vec3b(b, g, r);
+        in >> p.filled;
+        if (p.filled) {
+          p.filled = true;
+        } else {
+          p.filled = false;
+        }
         polygons.push_back(p);
       } else if (type == "BEZIER") {
         Bezier bz;
@@ -1438,6 +1523,19 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
 
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(clip_menu_root), clip_submenu);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), clip_menu_root);
+
+  // === FILLING MENU ===
+  GtkWidget *fill_menu_root = gtk_menu_item_new_with_label("Filling");
+  GtkWidget *fill_submenu = gtk_menu_new();
+
+  GtkWidget *fill_item = gtk_menu_item_new_with_label("Fill");
+  GtkWidget *unfill_item = gtk_menu_item_new_with_label("Unfill");
+
+  gtk_menu_shell_append(GTK_MENU_SHELL(fill_submenu), fill_item);
+  gtk_menu_shell_append(GTK_MENU_SHELL(fill_submenu), unfill_item);
+
+  gtk_menu_item_set_submenu(GTK_MENU_ITEM(fill_menu_root), fill_submenu);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), fill_menu_root);
 
   // === SIGNAL CONNECTIONS ===
   
@@ -1542,6 +1640,22 @@ GtkWidget *create_shape_menu(GtkWidget *window) {
           choose_clipping = false;
           clipedIndex     = -1;
           std::cout << "Now middle-click the polygon you wish to clip.\n";
+        }),
+        nullptr);
+    g_signal_connect(fill_item, "activate",
+        G_CALLBACK(+[](GtkWidget*, gpointer){
+          if (selectedPolygonIndex >= 0 && selectedPolygonIndex < polygons.size()) {
+            polygons[selectedPolygonIndex].filled = true;
+            redraw_shapes(drawing_area);
+          }
+        }),
+        nullptr);
+    g_signal_connect(unfill_item, "activate",
+        G_CALLBACK(+[](GtkWidget*, gpointer){
+          if (selectedPolygonIndex >= 0 && selectedPolygonIndex < polygons.size()) {
+            polygons[selectedPolygonIndex].filled = false;
+            redraw_shapes(drawing_area);
+          }
         }),
         nullptr);
   
