@@ -1453,14 +1453,34 @@ void save_shapes_to_file(GtkWidget *parent) {
           << (int)circle.color[1] << " " << (int)circle.color[2] << "\n";
 
     for (const auto &poly : polygons) {
-      out << "POLYGON " << poly.thickness << " " << poly.vertices.size();
+      out << "POLYGON "
+          << poly.thickness << " "
+          << poly.vertices.size();
       for (const auto &v : poly.vertices)
         out << " " << v.x << " " << v.y;
-      out << " " << (int)poly.color[0] << " " << (int)poly.color[1] << " "
-          << (int)poly.color[2];
-      out << " " << (int)poly.filled;
-      out << "\n";
+      out << " "
+          << int(poly.color[0]) << " "
+          << int(poly.color[1]) << " "
+          << int(poly.color[2]) << " "
+          << int(poly.filled) << " "
+          << int(poly.useImageFill)
+          << "\n";
+
+      if (poly.useImageFill && !poly.fillImage.empty()) {
+        int rows = poly.fillImage.rows;
+        int cols = poly.fillImage.cols;
+        out << "IMG_FILL " << rows << " " << cols << "\n";
+        for (int y = 0; y < rows; ++y) {
+          for (int x = 0; x < cols; ++x) {
+            cv::Vec3b pix = poly.fillImage.at<cv::Vec3b>(y, x);
+            out << int(pix[0]) << " "
+                << int(pix[1]) << " "
+                << int(pix[2]) << "\n";
+          }
+        }
+      }
     }
+    
 
     for (const auto &bz : beziers) {
       out << "BEZIER " << bz.thickness << " " << bz.ctrl.size();
@@ -1505,18 +1525,18 @@ void load_shapes_from_file(GtkWidget *parent) {
         int r, g, b;
         in >> l.start.x >> l.start.y >> l.end.x >> l.end.y >> l.thickness >>
             r >> g >> b;
-        l.color = cv::Vec3b(b, g, r); // OpenCV uses BGR
+        l.color = cv::Vec3b(r, g, b); 
         lines.push_back(l);
       } else if (type == "CIRCLE") {
         Circle c;
         int r, g, b;
         bool filled;
         in >> c.center.x >> c.center.y >> c.radius >> r >> g >> b;
-        c.color = cv::Vec3b(b, g, r);
+        c.color = cv::Vec3b(r, g, b);
         circles.push_back(c);
       } else if (type == "POLYGON") {
         Polygon p;
-        int count, r, g, b;
+        int count, r, g, b, imgFlag;
         in >> p.thickness >> count;
         for (int i = 0; i < count; ++i) {
           cv::Point pt;
@@ -1524,14 +1544,32 @@ void load_shapes_from_file(GtkWidget *parent) {
           p.vertices.push_back(pt);
         }
         in >> r >> g >> b;
-        p.color = cv::Vec3b(b, g, r);
+        p.color = cv::Vec3b(r, g, b);
         in >> p.filled;
-        if (p.filled) {
-          p.filled = true;
-        } else {
-          p.filled = false;
+        in >> imgFlag;
+        p.useImageFill = (imgFlag != 0);
+
+        if (p.useImageFill) {
+          std::string marker;
+          int rows, cols;
+          in >> marker;
+          if (marker != "IMG_FILL") {
+            throw std::runtime_error("Expected IMG_FILL marker, got: " + marker);
+          }
+          in >> rows >> cols;
+          p.fillImage = cv::Mat(rows, cols, CV_8UC3);
+          for (int y = 0; y < rows; ++y) {
+            for (int x = 0; x < cols; ++x) {
+              int bb, gg, rr;
+              in >> rr >> gg >> bb;
+              p.fillImage.at<cv::Vec3b>(y, x) =
+                cv::Vec3b((uint8_t)rr, (uint8_t)gg, (uint8_t)bb);
+            }
+          }
         }
-        polygons.push_back(p);
+
+        polygons.push_back(std::move(p));
+      
       } else if (type == "BEZIER") {
         Bezier bz;
         int count, r, g, b;
@@ -1544,7 +1582,7 @@ void load_shapes_from_file(GtkWidget *parent) {
         }
         in >> r >> g >> b;
 
-        bz.color = cv::Vec3b(b, g, r);
+        bz.color = cv::Vec3b(r, g, b);
         beziers.push_back(bz);
       }
     }
