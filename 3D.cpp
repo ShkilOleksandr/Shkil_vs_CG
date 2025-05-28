@@ -20,7 +20,7 @@ Axis currentAxis = Axis::Z;
 struct Line {
   cv::Point start, end;
   int thickness;
-  cv::Vec3b color = {0, 0, 255}; // default red
+  cv::Vec3b color = {0, 0, 255}; 
 };
 
 struct Cube {
@@ -29,7 +29,6 @@ struct Cube {
     cv::Vec3b        color     = {0, 255, 0};
     std::vector<cv::Point3f> vertices;
 
-    // NEW: store current orientation
     cv::Matx33f      orientation = cv::Matx33f::eye();
 
     Cube(const cv::Point3f& c, float s, const cv::Vec3b& col = {0,255,0})
@@ -38,7 +37,6 @@ struct Cube {
         computeVertices();
     }
 
-    // apply rotation about local Z
     void rotateZ(float angleRadians) {
         float c = std::cos(angleRadians), s = std::sin(angleRadians);
         cv::Matx33f Rz(
@@ -60,7 +58,6 @@ struct Cube {
         computeVertices();
     }
 
-    // rotate about local Y
     void rotateY(float angle) {
         float c = std::cos(angle), s = std::sin(angle);
         cv::Matx33f Ry(
@@ -72,10 +69,8 @@ struct Cube {
         computeVertices();
     }
 
-    // rebuild the 8 corner points in world coords
     void computeVertices() {
         float h = sideLength * 0.5f;
-        // base corners in local (center = origin)
         static const cv::Point3f base[8] = {
             {-h,-h,-h},{+h,-h,-h},{+h,+h,-h},{-h,+h,-h},
             {-h,-h,+h},{+h,-h,+h},{+h,+h,+h},{-h,+h,+h}
@@ -95,7 +90,7 @@ struct Cube {
 };
 struct Tetrahedron {
   std::vector<cv::Point3f> vertices;
-  cv::Vec3b color = {255, 0, 0}; // default blue
+  cv::Vec3b color = {255, 0, 0}; 
 };
 
 
@@ -303,26 +298,20 @@ void drawLineDDA(cv::Mat &img, cv::Point p0, cv::Point p1,
 }
 
 void drawCube(cv::Mat &img, const Cube &cube) {
-    // Project 3D→2D (x,y) and collect into ints
     std::vector<cv::Point> proj;
     proj.reserve(8);
     for (auto &v3 : cube.vertices)
         proj.emplace_back( int(v3.x), int(v3.y) );
 
-    // Indices of the bottom face:
     const int B[4] = {0,1,2,3};
-    // Top face is just bottom+4:
     const int T[4] = {4,5,6,7};
 
-    // draw bottom square
     for (int i = 0; i < 4; ++i) {
         drawLineDDA(img, proj[B[i]], proj[B[(i+1)%4]], cube.color, 1);
     }
-    // draw top square
     for (int i = 0; i < 4; ++i) {
         drawLineDDA(img, proj[T[i]], proj[T[(i+1)%4]], cube.color, 1);
     }
-    // draw the vertical edges
     for (int i = 0; i < 4; ++i) {
         drawLineDDA(img, proj[B[i]], proj[T[i]], cube.color, 1);
     }
@@ -344,12 +333,11 @@ double extract_scroll_delta(GdkEventScroll *event) {
 }
 
 gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
-    // map the GTK click → image coords
+
     cv::Point pt = map_click_to_image(widget, event->x, event->y);
 
     if (event->button == GDK_BUTTON_MIDDLE) {
         selectedCube = -1;
-        // test topmost first
         for (int i = int(cubes.size()) - 1; i >= 0; --i) {
             std::vector<cv::Point> proj;
             proj.reserve(8);
@@ -365,36 +353,33 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
         return TRUE;
     }
 
-    // only respond to left-button presses
     if (event->button == GDK_BUTTON_PRIMARY) {
         if (currentShape == ShapeType::Cube) {
-            // create a cube centered where you clicked, at z=0
             Cube c(cv::Point3f(pt.x, pt.y, 0.0f), DEFAULT_CUBE_SIZE);
             c.center     = cv::Point3f(pt.x, pt.y, 0.0f);
             c.sideLength = DEFAULT_CUBE_SIZE;
-            // c.color uses its default {0,255,0}
 
             cubes.push_back(c);
         }
         else if (currentShape == ShapeType::Tetrahedron) {
-            // …your existing logic for building tetrahedrons…
+
         }
 
-        // trigger a redraw
+
         gtk_widget_queue_draw(widget);
     }
 
     return TRUE;
 }
  gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
-     double delta = extract_scroll_delta(event);  // +1 or -1
+     double delta = extract_scroll_delta(event); 
 
     if (selectedCube >= 0) {
         float angle = float(delta) * (5.0f * CV_PI/180.0f);
         switch (currentAxis) {
           case Axis::X: cubes[selectedCube].rotateX(angle); break;
           case Axis::Y: cubes[selectedCube].rotateY(angle); break;
-          case Axis::Z: /*fall-through*/ 
+          case Axis::Z: 
           default:       cubes[selectedCube].rotateZ(angle); break;
         }
         gtk_widget_queue_draw(widget);
@@ -406,27 +391,25 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
 
  gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
 
-  // ── 1) clear the canvas to white each frame ──
+
   image.setTo(cv::Scalar(255,255,255));
 
-  // ── 2) draw all cubes ──
-    // draw & highlight selected
+
     for (int i = 0; i < (int)cubes.size(); ++i) {
         if (i == selectedCube) {
             Cube tmp = cubes[i];
-            tmp.color = {0,0,255};         // highlight in blue
+            tmp.color = {0,0,255};         
             drawCube(image, tmp);
         } else {
             drawCube(image, cubes[i]);
         }
     }
 
-  // ── 3) draw all tetrahedra ──
 //   for (const auto &tet : tetrahedrons) {
 //     drawTetrahedron(image, tet);
 //   }
 
-  // Now convert to RGB for Cairo
+
   cv::Mat rgb_image;
   cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
  
@@ -455,7 +438,7 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
    return FALSE;
  }
 
-// at file‐scope, before main():
+
 
 static void
 on_cube_activate(GtkMenuItem* item, gpointer data)
@@ -494,7 +477,7 @@ gboolean on_key_press(GtkWidget*, GdkEventKey *ev, gpointer) {
 }
 
 gboolean on_key_release(GtkWidget*, GdkEventKey *ev, gpointer) {
-    // when X or Y is released, go back to Z
+
     if (ev->keyval==GDK_KEY_x||ev->keyval==GDK_KEY_X
      || ev->keyval==GDK_KEY_y||ev->keyval==GDK_KEY_Y)
     {
