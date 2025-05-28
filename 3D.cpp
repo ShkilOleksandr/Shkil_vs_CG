@@ -11,6 +11,12 @@ enum class ShapeType { Cube, Tetrahedron};
 ShapeType currentShape = ShapeType::Cube;
 GtkWidget *shape_menu;
 
+constexpr float DEFAULT_CUBE_SIZE = 50.0f;
+int selectedCube = -1;
+
+enum class Axis { X, Y, Z };
+Axis currentAxis = Axis::Z;
+
 struct Line {
   cv::Point start, end;
   int thickness;
@@ -18,9 +24,74 @@ struct Line {
 };
 
 struct Cube {
-  cv::Point3f center;
-  float sideLength;
-  cv::Vec3b color = {0, 255, 0}; // default green
+    cv::Point3f      center;
+    float            sideLength;
+    cv::Vec3b        color     = {0, 255, 0};
+    std::vector<cv::Point3f> vertices;
+
+    // NEW: store current orientation
+    cv::Matx33f      orientation = cv::Matx33f::eye();
+
+    Cube(const cv::Point3f& c, float s, const cv::Vec3b& col = {0,255,0})
+      : center(c), sideLength(s), color(col)
+    {
+        computeVertices();
+    }
+
+    // apply rotation about local Z
+    void rotateZ(float angleRadians) {
+        float c = std::cos(angleRadians), s = std::sin(angleRadians);
+        cv::Matx33f Rz(
+           c, -s, 0,
+           s,  c, 0,
+           0,  0, 1
+        );
+        orientation = Rz * orientation;
+        computeVertices();
+    }
+     void rotateX(float angle) {
+        float c = std::cos(angle), s = std::sin(angle);
+        cv::Matx33f Rx(
+            1,  0, 0,
+            0,  c,-s,
+            0,  s, c
+        );
+        orientation = Rx * orientation;
+        computeVertices();
+    }
+
+    // rotate about local Y
+    void rotateY(float angle) {
+        float c = std::cos(angle), s = std::sin(angle);
+        cv::Matx33f Ry(
+             c, 0, s,
+             0, 1, 0,
+            -s, 0, c
+        );
+        orientation = Ry * orientation;
+        computeVertices();
+    }
+
+    // rebuild the 8 corner points in world coords
+    void computeVertices() {
+        float h = sideLength * 0.5f;
+        // base corners in local (center = origin)
+        static const cv::Point3f base[8] = {
+            {-h,-h,-h},{+h,-h,-h},{+h,+h,-h},{-h,+h,-h},
+            {-h,-h,+h},{+h,-h,+h},{+h,+h,+h},{-h,+h,+h}
+        };
+
+        vertices.clear();
+        for (int i = 0; i < 8; ++i) {
+            cv::Vec3f v(base[i].x, base[i].y, base[i].z);
+            cv::Vec3f vr = orientation * v;
+            vertices.emplace_back(
+              center.x + vr[0],
+              center.y + vr[1],
+              center.z + vr[2]
+            );
+        }
+    }
 };
 struct Tetrahedron {
   std::vector<cv::Point3f> vertices;
@@ -231,6 +302,33 @@ void drawLineDDA(cv::Mat &img, cv::Point p0, cv::Point p1,
   }
 }
 
+void drawCube(cv::Mat &img, const Cube &cube) {
+    // Project 3D→2D (x,y) and collect into ints
+    std::vector<cv::Point> proj;
+    proj.reserve(8);
+    for (auto &v3 : cube.vertices)
+        proj.emplace_back( int(v3.x), int(v3.y) );
+
+    // Indices of the bottom face:
+    const int B[4] = {0,1,2,3};
+    // Top face is just bottom+4:
+    const int T[4] = {4,5,6,7};
+
+    // draw bottom square
+    for (int i = 0; i < 4; ++i) {
+        drawLineDDA(img, proj[B[i]], proj[B[(i+1)%4]], cube.color, 1);
+    }
+    // draw top square
+    for (int i = 0; i < 4; ++i) {
+        drawLineDDA(img, proj[T[i]], proj[T[(i+1)%4]], cube.color, 1);
+    }
+    // draw the vertical edges
+    for (int i = 0; i < 4; ++i) {
+        drawLineDDA(img, proj[B[i]], proj[T[i]], cube.color, 1);
+    }
+}
+
+
 double extract_scroll_delta(GdkEventScroll *event) {
   double delta = 0;
   if (event->direction == GDK_SCROLL_SMOOTH) {
@@ -246,44 +344,116 @@ double extract_scroll_delta(GdkEventScroll *event) {
 }
 
 gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
+    // map the GTK click → image coords
     cv::Point pt = map_click_to_image(widget, event->x, event->y);
+
+    if (event->button == GDK_BUTTON_MIDDLE) {
+        selectedCube = -1;
+        // test topmost first
+        for (int i = int(cubes.size()) - 1; i >= 0; --i) {
+            std::vector<cv::Point> proj;
+            proj.reserve(8);
+            for (auto &v : cubes[i].vertices)
+                proj.emplace_back(int(v.x), int(v.y));
+            cv::Rect bbox = cv::boundingRect(proj);
+            if (bbox.contains(pt)) {
+                selectedCube = i;
+                break;
+            }
+        }
+        gtk_widget_queue_draw(widget);
+        return TRUE;
+    }
+
+    // only respond to left-button presses
+    if (event->button == GDK_BUTTON_PRIMARY) {
+        if (currentShape == ShapeType::Cube) {
+            // create a cube centered where you clicked, at z=0
+            Cube c(cv::Point3f(pt.x, pt.y, 0.0f), DEFAULT_CUBE_SIZE);
+            c.center     = cv::Point3f(pt.x, pt.y, 0.0f);
+            c.sideLength = DEFAULT_CUBE_SIZE;
+            // c.color uses its default {0,255,0}
+
+            cubes.push_back(c);
+        }
+        else if (currentShape == ShapeType::Tetrahedron) {
+            // …your existing logic for building tetrahedrons…
+        }
+
+        // trigger a redraw
+        gtk_widget_queue_draw(widget);
+    }
+
     return TRUE;
 }
+ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
+     double delta = extract_scroll_delta(event);  // +1 or -1
 
-gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
-  double delta = extract_scroll_delta(event);
+    if (selectedCube >= 0) {
+        float angle = float(delta) * (5.0f * CV_PI/180.0f);
+        switch (currentAxis) {
+          case Axis::X: cubes[selectedCube].rotateX(angle); break;
+          case Axis::Y: cubes[selectedCube].rotateY(angle); break;
+          case Axis::Z: /*fall-through*/ 
+          default:       cubes[selectedCube].rotateZ(angle); break;
+        }
+        gtk_widget_queue_draw(widget);
+        return TRUE;
+    }
 
-  return TRUE;
-}
+     return TRUE;
+ }
 
-gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
+ gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
+
+  // ── 1) clear the canvas to white each frame ──
+  image.setTo(cv::Scalar(255,255,255));
+
+  // ── 2) draw all cubes ──
+    // draw & highlight selected
+    for (int i = 0; i < (int)cubes.size(); ++i) {
+        if (i == selectedCube) {
+            Cube tmp = cubes[i];
+            tmp.color = {0,0,255};         // highlight in blue
+            drawCube(image, tmp);
+        } else {
+            drawCube(image, cubes[i]);
+        }
+    }
+
+  // ── 3) draw all tetrahedra ──
+//   for (const auto &tet : tetrahedrons) {
+//     drawTetrahedron(image, tet);
+//   }
+
+  // Now convert to RGB for Cairo
   cv::Mat rgb_image;
   cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
-
-  GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
-      rgb_image.data, GDK_COLORSPACE_RGB, FALSE, 8, rgb_image.cols,
-      rgb_image.rows, rgb_image.step, NULL, NULL);
-
-  int w = gtk_widget_get_allocated_width(widget);
-  int h = gtk_widget_get_allocated_height(widget);
-  double scale_x = static_cast<double>(w) / image.cols;
-  double scale_y = static_cast<double>(h) / image.rows;
-  current_scale = std::min(scale_x, scale_y);
-
-  int draw_w = static_cast<int>(image.cols * current_scale);
-  int draw_h = static_cast<int>(image.rows * current_scale);
-  int offset_x = (w - draw_w) / 2;
-  int offset_y = (h - draw_h) / 2;
-
-  cairo_translate(cr, offset_x, offset_y);
-  cairo_scale(cr, current_scale, current_scale);
-
-  gdk_cairo_set_source_pixbuf(cr, pixbuf, 0, 0);
-  cairo_paint(cr);
-
-  g_object_unref(pixbuf);
-  return FALSE;
-}
+ 
+   GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+       rgb_image.data, GDK_COLORSPACE_RGB, FALSE, 8, rgb_image.cols,
+       rgb_image.rows, rgb_image.step, NULL, NULL);
+ 
+   int w = gtk_widget_get_allocated_width(widget);
+   int h = gtk_widget_get_allocated_height(widget);
+   double scale_x = static_cast<double>(w) / image.cols;
+   double scale_y = static_cast<double>(h) / image.rows;
+   current_scale = std::min(scale_x, scale_y);
+ 
+   int draw_w = static_cast<int>(image.cols * current_scale);
+   int draw_h = static_cast<int>(image.rows * current_scale);
+   int offset_x = (w - draw_w) / 2;
+   int offset_y = (h - draw_h) / 2;
+ 
+   cairo_translate(cr, offset_x, offset_y);
+   cairo_scale(cr, current_scale, current_scale);
+ 
+   gdk_cairo_set_source_pixbuf(cr, pixbuf, 0, 0);
+   cairo_paint(cr);
+ 
+   g_object_unref(pixbuf);
+   return FALSE;
+ }
 
 // at file‐scope, before main():
 
@@ -311,7 +481,28 @@ on_aliasing_toggle(GtkMenuItem* item, gpointer data)
     gtk_widget_queue_draw(drawing_area);
 }
 
+gboolean on_key_press(GtkWidget*, GdkEventKey *ev, gpointer) {
+    switch(ev->keyval) {
+      case GDK_KEY_x: case GDK_KEY_X:
+        currentAxis = Axis::X; return TRUE;
+      case GDK_KEY_y: case GDK_KEY_Y:
+        currentAxis = Axis::Y; return TRUE;
+      case GDK_KEY_z: case GDK_KEY_Z:
+        currentAxis = Axis::Z; return TRUE;
+    }
+    return FALSE;
+}
 
+gboolean on_key_release(GtkWidget*, GdkEventKey *ev, gpointer) {
+    // when X or Y is released, go back to Z
+    if (ev->keyval==GDK_KEY_x||ev->keyval==GDK_KEY_X
+     || ev->keyval==GDK_KEY_y||ev->keyval==GDK_KEY_Y)
+    {
+        currentAxis = Axis::Z;
+        return TRUE;
+    }
+    return FALSE;
+}
 
 
 GtkWidget* create_shape_menu() {
@@ -352,34 +543,38 @@ GtkWidget* create_shape_menu() {
 
 
 int main(int argc, char *argv[]) {
-  gtk_init(&argc, &argv);
-  image = cv::Mat::zeros(600, 800, CV_8UC3);
-  image.setTo(cv::Scalar(255, 255, 255));
-  GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_title(GTK_WINDOW(window), "3D Shape Editor");
-  gtk_window_set_default_size(GTK_WINDOW(window), 1000, 800);
+    gtk_init(&argc, &argv);
+    image = cv::Mat::zeros(600, 800, CV_8UC3);
+    image.setTo(cv::Scalar(255, 255, 255));
+    GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(window), "3D Shape Editor");
+    gtk_window_set_default_size(GTK_WINDOW(window), 1000, 800);
 
-  GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_container_add(GTK_CONTAINER(window), vbox);
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(window), vbox);
 
-  shape_menu = create_shape_menu();
-  gtk_box_pack_start(GTK_BOX(vbox), shape_menu, FALSE, FALSE, 0);
+    shape_menu = create_shape_menu();
+    gtk_box_pack_start(GTK_BOX(vbox), shape_menu, FALSE, FALSE, 0);
 
-  drawing_area = gtk_drawing_area_new();
-  gtk_widget_set_hexpand(drawing_area, TRUE);
-  gtk_widget_set_vexpand(drawing_area, TRUE);
-  gtk_box_pack_start(GTK_BOX(vbox), drawing_area, TRUE, TRUE, 0);
+    drawing_area = gtk_drawing_area_new();
+    gtk_widget_set_hexpand(drawing_area, TRUE);
+    gtk_widget_set_vexpand(drawing_area, TRUE);
+    gtk_box_pack_start(GTK_BOX(vbox), drawing_area, TRUE, TRUE, 0);
 
-  gtk_widget_add_events(drawing_area, GDK_BUTTON_PRESS_MASK | GDK_SCROLL_MASK |
-                                          GDK_SMOOTH_SCROLL_MASK);
+    gtk_widget_add_events(drawing_area, GDK_BUTTON_PRESS_MASK | GDK_SCROLL_MASK |
+                                            GDK_SMOOTH_SCROLL_MASK);
 
-  g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_callback), NULL);
-  g_signal_connect(drawing_area, "button-press-event",
-                   G_CALLBACK(on_mouse_click), NULL);
-  g_signal_connect(drawing_area, "scroll-event", G_CALLBACK(on_scroll), NULL);
-  g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(drawing_area, "draw", G_CALLBACK(draw_callback), NULL);
+    g_signal_connect(drawing_area, "button-press-event",
+                    G_CALLBACK(on_mouse_click), NULL);
+    g_signal_connect(drawing_area, "scroll-event", G_CALLBACK(on_scroll), NULL);
+    g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
-  gtk_widget_show_all(window);
-  gtk_main();
-  return 0;
+    gtk_widget_set_can_focus(window, TRUE);
+    g_signal_connect(window, "key-press-event",   G_CALLBACK(on_key_press),   NULL);    
+    g_signal_connect(window, "key-release-event", G_CALLBACK(on_key_release), NULL);
+
+    gtk_widget_show_all(window);
+    gtk_main();
+    return 0;
 }
