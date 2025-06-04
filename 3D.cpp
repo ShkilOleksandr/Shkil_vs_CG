@@ -59,6 +59,10 @@ enum class Axis { X, Y, Z };
 Axis currentAxis = Axis::Z;
 bool use_antialiasing = false;
 
+static int clampInt(int x, int low, int high) {
+    return (x < low ? low : (x > high ? high : x));
+}
+
 //————————————————————————————————————————————————————————————————————
 // FORWARD DECLARATIONS
 
@@ -916,28 +920,88 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
         return FALSE;
     }
 
-    // If Shift is held, SCALE the selected shape
+    // ------- 1) HANDLE Ctrl + Wheel: change mesh density -------
+    if (event->state & GDK_CONTROL_MASK) {
+        // We'll treat "wheelAmt < 0" as "increase subdivisions",
+        // and "wheelAmt > 0" as "decrease subdivisions".
+        bool increase = (wheelAmt < 0);
+
+        // Clamp settings:
+        const int MIN_SUBDIV = 3;    // you can pick any reasonable minimum
+        const int MAX_SUBDIV = 128;  // or whatever upper bound you like
+
+        int idx = selectedShapeIndex;
+
+        // 1a) Cube has no subdivisions parameter, so skip it
+        if (idx < int(cubes.size())) {
+            // nothing to do for a pure-cube mesh (we keep it at 8 corners)
+        }
+        // 1b) Cylinder: adjust subdivisions
+        else if (idx < int(cubes.size() + cylinders.size())) {
+            int cylIdx = idx - int(cubes.size());
+            Cylinder & cyl = cylinders[cylIdx];
+            int oldSub = cyl.subdivisions;
+            int newSub = oldSub + (increase ? +1 : -1);
+            newSub = clampInt(newSub, MIN_SUBDIV, MAX_SUBDIV);
+            if (newSub != oldSub) {
+                cyl.subdivisions = newSub;
+                cyl.buildMesh();  // rebuild with new subdivisions
+            }
+        }
+        // 1c) Sphere: adjust both latBands & lonBands
+        else if (idx < int(cubes.size() + cylinders.size() + spheres.size())) {
+            int sphIdx = idx - int(cubes.size() + cylinders.size());
+            Sphere & sph = spheres[sphIdx];
+            int oldLat = sph.latBands;
+            int oldLon = sph.lonBands;
+            int newLat = oldLat + (increase ? +1 : -1);
+            int newLon = oldLon + (increase ? +1 : -1);
+            newLat = clampInt(newLat, MIN_SUBDIV, MAX_SUBDIV);
+            newLon = clampInt(newLon, MIN_SUBDIV, MAX_SUBDIV);
+            if (newLat != oldLat || newLon != oldLon) {
+                sph.latBands = newLat;
+                sph.lonBands = newLon;
+                sph.buildMesh();  // rebuild with new lat/lon
+            }
+        }
+        // 1d) Cone: adjust subdivisions
+        else {
+            int coneIdx = idx - int(cubes.size() + cylinders.size() + spheres.size());
+            Cone & cone = cones[coneIdx];
+            int oldSub = cone.subdivisions;
+            int newSub = oldSub + (increase ? +1 : -1);
+            newSub = clampInt(newSub, MIN_SUBDIV, MAX_SUBDIV);
+            if (newSub != oldSub) {
+                cone.subdivisions = newSub;
+                cone.buildMesh();  // rebuild with new subdivisions
+            }
+        }
+
+        gtk_widget_queue_draw(widget);
+        return TRUE;  // we handled Ctrl+scroll
+    }
+
+    // ------- 2) SHIFT + Wheel: scale shape (as before) -------
     if (event->state & GDK_SHIFT_MASK) {
         const float k = 0.1f;
         float scaleFactor = (wheelAmt < 0 ? 1.0f + k : 1.0f - k);
-        std::cout << "Scaling by factor: " << scaleFactor << std::endl;
+
         int idx = selectedShapeIndex;
-        // 1) Cube range: [0 .. cubes.size()-1]
+        // Cube range: [0 .. cubes.size()-1]
         if (idx < int(cubes.size())) {
-            std::cout << "Scaling cube at index " << idx << std::endl;
             cubes[idx].scale(scaleFactor);
         }
-        // 2) Cylinder range: [cubes.size() .. cubes.size()+cylinders.size()-1]
+        // Cylinder range: [cubes.size() .. cubes.size()+cylinders.size()-1]
         else if (idx < int(cubes.size() + cylinders.size())) {
             int cylIdx = idx - int(cubes.size());
             cylinders[cylIdx].scale(scaleFactor);
         }
-        // 3) Sphere range: [cubes.size()+cylinders.size() .. cubes+…+cylinders+spheres.size()-1]
+        // Sphere range: [cubes.size()+cylinders.size() .. cubes+…+cylinders+spheres.size()-1]
         else if (idx < int(cubes.size() + cylinders.size() + spheres.size())) {
             int sphIdx = idx - int(cubes.size() + cylinders.size());
             spheres[sphIdx].scale(scaleFactor);
         }
-        // 4) Cone range: everything else
+        // Cone range: everything else
         else {
             int coneIdx = idx - int(cubes.size() + cylinders.size() + spheres.size());
             cones[coneIdx].scale(scaleFactor);
@@ -947,17 +1011,18 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
         return TRUE;
     }
 
-    // Otherwise, ROTATE the selected shape around currentAxis
+    // ------- 3) Plain Wheel: rotate shape (as before) -------
     float angle = wheelAmt * (5.0f * CV_PI / 180.0f);
     int idx = selectedShapeIndex;
+    // 3a) Rotate cube
     if (idx < int(cubes.size())) {
-        // Rotate cube
         switch (currentAxis) {
             case Axis::X: cubes[idx].rotateX(angle); break;
             case Axis::Y: cubes[idx].rotateY(angle); break;
             case Axis::Z: cubes[idx].rotateZ(angle); break;
         }
     }
+    // 3b) Rotate cylinder
     else if (idx < int(cubes.size() + cylinders.size())) {
         int cylIdx = idx - int(cubes.size());
         switch (currentAxis) {
@@ -966,6 +1031,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             case Axis::Z: cylinders[cylIdx].rotateZ(angle); break;
         }
     }
+    // 3c) Rotate sphere
     else if (idx < int(cubes.size() + cylinders.size() + spheres.size())) {
         int sphIdx = idx - int(cubes.size() + cylinders.size());
         switch (currentAxis) {
@@ -974,6 +1040,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             case Axis::Z: spheres[sphIdx].rotateZ(angle); break;
         }
     }
+    // 3d) Rotate cone
     else {
         int coneIdx = idx - int(cubes.size() + cylinders.size() + spheres.size());
         switch (currentAxis) {
@@ -986,6 +1053,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
     gtk_widget_queue_draw(widget);
     return TRUE;
 }
+
 
 //————————————————————————————————————————————————————————————————————
 // KEY PRESS/RELEASE (switch rotation axis)
