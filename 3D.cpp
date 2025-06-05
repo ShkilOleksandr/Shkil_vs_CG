@@ -1,20 +1,3 @@
-// scene_with_cubes_cylinders_spheres_cones.cpp
-//
-// A GTK/OpenCV application that lets you place:
-//   - Cubes     (triangle-mesh)
-//   - Cylinders  (triangle-mesh)
-//   - Spheres    (triangle-mesh, latitude/longitude)
-//   - Cones      (triangle-mesh)
-// Supports interactive placement, selection, rotation (no modifier), scaling (Shift+scroll), and scene load/save.
-//
-// Compile (Linux):
-//   g++ scene_with_cubes_cylinders_spheres_cones.cpp -o scene_app `pkg-config --cflags --libs gtk+-3.0 opencv4`
-//
-// Run:
-//   ./scene_app [optional_scene.scene]
-//
-// If you pass a ".scene" file, it will load cubes, cylinders, spheres, and cones.
-
 #include <cmath>
 #include <fstream>
 #include <gtk/gtk.h>
@@ -45,14 +28,7 @@ constexpr float DEFAULT_CONE_RADIUS   = 25.0f;
 constexpr float DEFAULT_CONE_HEIGHT   = 50.0f;
 constexpr int   DEFAULT_CONE_SUBDIV   = 16;
 
-// selectedShapeIndex:
-//   -1                      → no shape selected.
-//   [0 .. cubes.size()-1]                                 → index into cubes
-//   [cubes.size() .. cubes.size()+cylinders.size()-1]     → index-cubes.size() into cylinders
-//   [cubes.size()+cylinders.size() .. cubes+…+cylinders+spheres.size()-1]
-//       → index-(cubes.size()+cylinders.size()) into spheres
-//   [cubes.size()+cylinders.size()+spheres.size() .. … + cones.size()-1]
-//       → index-(cubes.size()+cylinders.size()+spheres.size()) into cones
+
 int selectedShapeIndex = -1;
 
 enum class Axis { X, Y, Z };
@@ -70,7 +46,7 @@ bool loadScene(const std::string& filename);
 bool saveScene(const std::string& filename);
 
 //————————————————————————————————————————————————————————————————————
-// CUBE STRUCT (MESH)
+// CUBE STRUCT 
 
 struct Cube {
     cv::Point3f                 center;
@@ -78,9 +54,8 @@ struct Cube {
     cv::Vec3b                   color       = {0,255,0};
     cv::Matx33f                 orientation = cv::Matx33f::eye();
 
-    // Exactly 8 vertices + 12 triangular faces:
-    std::vector<cv::Point3f>    vertices;  // 8 corners
-    std::vector<std::array<int,3>> faces;   // 12 triangles
+    std::vector<cv::Point3f>    vertices;  
+    std::vector<std::array<int,3>> faces;  
 
     Cube(const cv::Point3f &c, float s,
          const cv::Matx33f &ori = cv::Matx33f::eye(),
@@ -122,35 +97,35 @@ struct Cube {
     }
 
     void buildMesh() {
-    float h = sideLength * 0.5f;
+        float h = sideLength * 0.5f;
 
-    // REMOVE STATIC KEYWORD HERE TO FIX VERTEX UPDATE ISSUE
-    const cv::Point3f baseCorners[8] = {
-        {-h,-h,-h}, {+h,-h,-h}, {+h,+h,-h}, {-h,+h,-h},
-        {-h,-h,+h}, {+h,-h,+h}, {+h,+h,+h}, {-h,+h,+h}
-    };
 
-    vertices.clear();
-    vertices.reserve(8);
-    for (int i = 0; i < 8; ++i) {
-        cv::Vec3f v(baseCorners[i].x, baseCorners[i].y, baseCorners[i].z);
-        cv::Vec3f vr = orientation * v;
-        vertices.emplace_back(
-            center.x + vr[0],
-            center.y + vr[1],
-            center.z + vr[2]
-        );
-    }
+        const cv::Point3f baseCorners[8] = {
+            {-h,-h,-h}, {+h,-h,-h}, {+h,+h,-h}, {-h,+h,-h},
+            {-h,-h,+h}, {+h,-h,+h}, {+h,+h,+h}, {-h,+h,+h}
+        };
 
-    // ALWAYS REBUILD FACES EACH TIME
-    faces.clear();
-    faces.reserve(12);
-    faces.push_back({0,1,2}); faces.push_back({0,2,3});
-    faces.push_back({4,6,5}); faces.push_back({4,7,6});
-    faces.push_back({1,5,6}); faces.push_back({1,6,2});
-    faces.push_back({0,7,3}); faces.push_back({0,4,7});
-    faces.push_back({0,5,4}); faces.push_back({0,1,5});
-    faces.push_back({3,6,2}); faces.push_back({3,7,6});
+        vertices.clear();
+        vertices.reserve(8);
+        for (int i = 0; i < 8; ++i) {
+            cv::Vec3f v(baseCorners[i].x, baseCorners[i].y, baseCorners[i].z);
+            cv::Vec3f vr = orientation * v;
+            vertices.emplace_back(
+                center.x + vr[0],
+                center.y + vr[1],
+                center.z + vr[2]
+            );
+        }
+
+
+        faces.clear();
+        faces.reserve(12);
+        faces.push_back({0,1,2}); faces.push_back({0,2,3});
+        faces.push_back({4,6,5}); faces.push_back({4,7,6});
+        faces.push_back({1,5,6}); faces.push_back({1,6,2});
+        faces.push_back({0,7,3}); faces.push_back({0,4,7});
+        faces.push_back({0,5,4}); faces.push_back({0,1,5});
+        faces.push_back({3,6,2}); faces.push_back({3,7,6});
     }
 
 
@@ -161,7 +136,7 @@ struct Cube {
 };
 
 //————————————————————————————————————————————————————————————————————
-// CYLINDER STRUCT (TRIANGULAR MESH)
+// CYLINDER STRUCT 
 
 struct Cylinder {
     cv::Point3f                 center;
@@ -170,8 +145,8 @@ struct Cylinder {
     int                         subdivisions;
     cv::Vec3b                   color       = {0,255,0};
     cv::Matx33f                 orientation = cv::Matx33f::eye();
-    std::vector<cv::Point3f>    vertices;    // 2*N circle points + 2 centers
-    std::vector<std::array<int,3>> faces;    // list of triangular faces
+    std::vector<cv::Point3f>    vertices;    
+    std::vector<std::array<int,3>> faces;    
 
     Cylinder(const cv::Point3f &c, float r, float h, int sub,
              const cv::Matx33f &ori = cv::Matx33f::eye(),
@@ -218,7 +193,7 @@ struct Cylinder {
         faces.clear();
 
         float halfh = height * 0.5f;
-        // 1) Generate N bottom-circle points (z = -halfh), N top-circle points (z = +halfh)
+
         for (int i = 0; i < subdivisions; ++i) {
             float theta = (2.0f * float(M_PI) * i) / subdivisions;
             float x = radius * cosf(theta);
@@ -236,19 +211,19 @@ struct Cylinder {
         vertices.push_back({ 0.0f, 0.0f, -halfh });
         vertices.push_back({ 0.0f, 0.0f, +halfh });
 
-        // 2) Bottom cap (fan)
+        //  Bottom cap 
         for (int i = 0; i < subdivisions; ++i) {
             int iNext = (i + 1) % subdivisions;
             faces.push_back({ idxBottomCenter, iNext, i });
         }
-        // 3) Top cap (fan)
+        // Top cap 
         for (int i = 0; i < subdivisions; ++i) {
             int iNext   = (i + 1) % subdivisions;
             int topI    = i + subdivisions;
             int topNext = iNext + subdivisions;
             faces.push_back({ idxTopCenter, topI, topNext });
         }
-        // 4) Side faces: each quad between (i, i+1) on bottom and (i, i+1)+subdiv on top
+        //  Side faces: each quad between (i, i+1) on bottom and (i, i+1)+subdiv on top
         for (int i = 0; i < subdivisions; ++i) {
             int iNext   = (i + 1) % subdivisions;
             int botI    = i;
@@ -261,7 +236,7 @@ struct Cylinder {
             faces.push_back({ botI, topNext, topI });
         }
 
-        // 5) Apply orientation + translation
+        // orientation + translation
         for (auto &v : vertices) {
             cv::Vec3f vv(v.x, v.y, v.z);
             cv::Vec3f vr = orientation * vv;
@@ -333,7 +308,6 @@ struct Sphere {
         vertices.clear();
         faces.clear();
 
-        // 1) Generate all (latBands+1) × lonBands vertices
         for (int i = 0; i <= latBands; ++i) {
             float theta = (float(i) * float(M_PI)) / float(latBands);
             float sinT  = sinf(theta);
@@ -343,11 +317,11 @@ struct Sphere {
                 float sinP = sinf(phi);
                 float cosP = cosf(phi);
                 cv::Point3f vLocal = {
-                    radius * sinT * cosP,   // x
-                    radius * sinT * sinP,   // y
-                    radius * cosT           // z
+                    radius * sinT * cosP,   
+                    radius * sinT * sinP,   
+                    radius * cosT           
                 };
-                // Apply orientation:
+              
                 cv::Vec3f vv(vLocal.x, vLocal.y, vLocal.z);
                 cv::Vec3f vr = orientation * vv;
                 vertices.push_back({ center.x + vr[0],
@@ -356,16 +330,15 @@ struct Sphere {
             }
         }
 
-        // 2) Build faces (two triangles per “quad” between lat i..i+1 and lon j..j+1)
+        
         for (int i = 0; i < latBands; ++i) {
             for (int j = 0; j < lonBands; ++j) {
                 int nextJ = (j + 1) % lonBands;
-                int v00 = i * lonBands + j;            // (i, j)
-                int v01 = i * lonBands + nextJ;        // (i, j+1)
-                int v10 = (i + 1) * lonBands + j;      // (i+1, j)
-                int v11 = (i + 1) * lonBands + nextJ;  // (i+1, j+1)
+                int v00 = i * lonBands + j;            
+                int v01 = i * lonBands + nextJ;        
+                int v10 = (i + 1) * lonBands + j;      
+                int v11 = (i + 1) * lonBands + nextJ;  
 
-                // Two triangles per quad:
                 faces.push_back({ v00, v10, v11 });
                 faces.push_back({ v00, v11, v01 });
             }
@@ -687,7 +660,7 @@ void drawLineDDA(cv::Mat &img, cv::Point p0, cv::Point p1,
 }
 
 //————————————————————————————————————————————————————————————————————
-// PROJECT 3D → 2D (DROP Z + ROUND)
+// PROJECT 3D → 2D 
 
 static inline cv::Point projectVertex(const cv::Point3f &v3) {
     return cv::Point(
@@ -786,14 +759,12 @@ double extract_scroll_delta(GdkEventScroll *event) {
 gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
     cv::Point pt = map_click_to_image(widget, event->x, event->y);
 
-    // Ensure the drawing_area has focus so we can detect Shift correctly:
+    
     gtk_widget_grab_focus(drawing_area);
 
-    // MIDDLE click = select topmost shape under cursor
     if (event->button == GDK_BUTTON_MIDDLE) {
         selectedShapeIndex = -1;
 
-        // 1) Check cubes (drawn “behind” but we choose an order here):
         for (int i = int(cubes.size()) - 1; i >= 0; --i) {
             vector<cv::Point> proj;
             proj.reserve(cubes[i].vertices.size());
@@ -814,7 +785,6 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
             return TRUE;
         }
 
-        // 2) Check cylinders (index offset by cubes.size())
         for (int i = int(cylinders.size()) - 1; i >= 0; --i) {
             vector<cv::Point> proj;
             proj.reserve(cylinders[i].vertices.size());
@@ -835,7 +805,6 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
             return TRUE;
         }
 
-        // 3) Check spheres (index offset by cubes.size()+cylinders.size())
         for (int i = int(spheres.size()) - 1; i >= 0; --i) {
             vector<cv::Point> proj;
             proj.reserve(spheres[i].vertices.size());
@@ -856,7 +825,6 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
             return TRUE;
         }
 
-        // 4) Check cones (index offset by cubes.size()+cylinders.size()+spheres.size())
         for (int i = int(cones.size()) - 1; i >= 0; --i) {
             vector<cv::Point> proj;
             proj.reserve(cones[i].vertices.size());
@@ -876,7 +844,6 @@ gboolean on_mouse_click(GtkWidget *widget, GdkEventButton *event, gpointer) {
         return TRUE;
     }
 
-    // LEFT click = place a new shape at (pt.x, pt.y, 0)
     if (event->button == GDK_BUTTON_PRIMARY) {
         if (currentShape == ShapeType::Cube) {
             Cube c({ float(pt.x), float(pt.y), 0.0f }, DEFAULT_CUBE_SIZE);
@@ -915,28 +882,23 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
     if (delta == 0.0) return FALSE;
     float wheelAmt = static_cast<float>(delta);
 
-    // If no shape is selected, do nothing
+
     if (selectedShapeIndex < 0) {
         return FALSE;
     }
 
-    // ------- 1) HANDLE Ctrl + Wheel: change mesh density -------
     if (event->state & GDK_CONTROL_MASK) {
-        // We'll treat "wheelAmt < 0" as "increase subdivisions",
-        // and "wheelAmt > 0" as "decrease subdivisions".
+  
         bool increase = (wheelAmt < 0);
 
-        // Clamp settings:
-        const int MIN_SUBDIV = 3;    // you can pick any reasonable minimum
-        const int MAX_SUBDIV = 128;  // or whatever upper bound you like
+        const int MIN_SUBDIV = 3;   
+        const int MAX_SUBDIV = 1024;  
 
         int idx = selectedShapeIndex;
 
-        // 1a) Cube has no subdivisions parameter, so skip it
         if (idx < int(cubes.size())) {
-            // nothing to do for a pure-cube mesh (we keep it at 8 corners)
+            
         }
-        // 1b) Cylinder: adjust subdivisions
         else if (idx < int(cubes.size() + cylinders.size())) {
             int cylIdx = idx - int(cubes.size());
             Cylinder & cyl = cylinders[cylIdx];
@@ -945,10 +907,10 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             newSub = clampInt(newSub, MIN_SUBDIV, MAX_SUBDIV);
             if (newSub != oldSub) {
                 cyl.subdivisions = newSub;
-                cyl.buildMesh();  // rebuild with new subdivisions
+                cyl.buildMesh(); 
             }
         }
-        // 1c) Sphere: adjust both latBands & lonBands
+
         else if (idx < int(cubes.size() + cylinders.size() + spheres.size())) {
             int sphIdx = idx - int(cubes.size() + cylinders.size());
             Sphere & sph = spheres[sphIdx];
@@ -961,10 +923,9 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             if (newLat != oldLat || newLon != oldLon) {
                 sph.latBands = newLat;
                 sph.lonBands = newLon;
-                sph.buildMesh();  // rebuild with new lat/lon
+                sph.buildMesh(); 
             }
         }
-        // 1d) Cone: adjust subdivisions
         else {
             int coneIdx = idx - int(cubes.size() + cylinders.size() + spheres.size());
             Cone & cone = cones[coneIdx];
@@ -973,35 +934,34 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             newSub = clampInt(newSub, MIN_SUBDIV, MAX_SUBDIV);
             if (newSub != oldSub) {
                 cone.subdivisions = newSub;
-                cone.buildMesh();  // rebuild with new subdivisions
+                cone.buildMesh();  
             }
         }
 
         gtk_widget_queue_draw(widget);
-        return TRUE;  // we handled Ctrl+scroll
+        return TRUE; 
     }
 
-    // ------- 2) SHIFT + Wheel: scale shape (as before) -------
     if (event->state & GDK_SHIFT_MASK) {
         const float k = 0.1f;
         float scaleFactor = (wheelAmt < 0 ? 1.0f + k : 1.0f - k);
 
         int idx = selectedShapeIndex;
-        // Cube range: [0 .. cubes.size()-1]
+
         if (idx < int(cubes.size())) {
             cubes[idx].scale(scaleFactor);
         }
-        // Cylinder range: [cubes.size() .. cubes.size()+cylinders.size()-1]
+        
         else if (idx < int(cubes.size() + cylinders.size())) {
             int cylIdx = idx - int(cubes.size());
             cylinders[cylIdx].scale(scaleFactor);
         }
-        // Sphere range: [cubes.size()+cylinders.size() .. cubes+…+cylinders+spheres.size()-1]
+    
         else if (idx < int(cubes.size() + cylinders.size() + spheres.size())) {
             int sphIdx = idx - int(cubes.size() + cylinders.size());
             spheres[sphIdx].scale(scaleFactor);
         }
-        // Cone range: everything else
+    
         else {
             int coneIdx = idx - int(cubes.size() + cylinders.size() + spheres.size());
             cones[coneIdx].scale(scaleFactor);
@@ -1011,10 +971,8 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
         return TRUE;
     }
 
-    // ------- 3) Plain Wheel: rotate shape (as before) -------
     float angle = wheelAmt * (5.0f * CV_PI / 180.0f);
     int idx = selectedShapeIndex;
-    // 3a) Rotate cube
     if (idx < int(cubes.size())) {
         switch (currentAxis) {
             case Axis::X: cubes[idx].rotateX(angle); break;
@@ -1022,7 +980,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             case Axis::Z: cubes[idx].rotateZ(angle); break;
         }
     }
-    // 3b) Rotate cylinder
+
     else if (idx < int(cubes.size() + cylinders.size())) {
         int cylIdx = idx - int(cubes.size());
         switch (currentAxis) {
@@ -1031,7 +989,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             case Axis::Z: cylinders[cylIdx].rotateZ(angle); break;
         }
     }
-    // 3c) Rotate sphere
+    
     else if (idx < int(cubes.size() + cylinders.size() + spheres.size())) {
         int sphIdx = idx - int(cubes.size() + cylinders.size());
         switch (currentAxis) {
@@ -1040,7 +998,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
             case Axis::Z: spheres[sphIdx].rotateZ(angle); break;
         }
     }
-    // 3d) Rotate cone
+    
     else {
         int coneIdx = idx - int(cubes.size() + cylinders.size() + spheres.size());
         switch (currentAxis) {
@@ -1056,7 +1014,7 @@ gboolean on_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer) {
 
 
 //————————————————————————————————————————————————————————————————————
-// KEY PRESS/RELEASE (switch rotation axis)
+// ROTATION AROUND AXIS
 
 gboolean on_key_press(GtkWidget*, GdkEventKey *ev, gpointer) {
     switch(ev->keyval) {
@@ -1080,18 +1038,14 @@ gboolean on_key_release(GtkWidget*, GdkEventKey *ev, gpointer) {
     return FALSE;
 }
 
-//————————————————————————————————————————————————————————————————————
-// GTK DRAW CALLBACK: CLEAR → DRAW ALL SHAPES → BLIT
 
 gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
-    // 1) Clear to white
     image.setTo(cv::Scalar(255,255,255));
 
-    // 2) Draw all cubes (mesh)
     for (int i = 0; i < int(cubes.size()); ++i) {
     if (selectedShapeIndex == i) {
         Cube tmp = cubes[i];
-        tmp.color = {0,0,255};   // highlight the selected cube in blue
+        tmp.color = {0,0,255};   
         drawCubeMesh(image, tmp);
     }
     else {
@@ -1100,7 +1054,6 @@ gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
 }
 
 
-    // 3) Draw all cylinders (mesh)
     for (int i = 0; i < int(cylinders.size()); ++i) {
         int idx = int(cubes.size()) + i;
         if (selectedShapeIndex == idx) {
@@ -1113,7 +1066,6 @@ gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
         }
     }
 
-    // 4) Draw all spheres (mesh)
     for (int i = 0; i < int(spheres.size()); ++i) {
         int idx = int(cubes.size() + cylinders.size()) + i;
         if (selectedShapeIndex == idx) {
@@ -1126,7 +1078,6 @@ gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
         }
     }
 
-    // 5) Draw all cones (mesh)
     for (int i = 0; i < int(cones.size()); ++i) {
         int idx = int(cubes.size() + cylinders.size() + spheres.size()) + i;
         if (selectedShapeIndex == idx) {
@@ -1139,7 +1090,6 @@ gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
         }
     }
 
-    // 6) Push image to GTK
     cv::Mat rgb_image;
     cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
 
@@ -1169,8 +1119,6 @@ gboolean draw_callback(GtkWidget *widget, cairo_t *cr, gpointer) {
     return FALSE;
 }
 
-//————————————————————————————————————————————————————————————————————
-// GTK MENU CALLBACKS FOR SHAPE SELECTION & ANTIALIASING
 
 static void on_cube_activate(GtkMenuItem*, gpointer) {
     currentShape = ShapeType::Cube;
@@ -1193,8 +1141,6 @@ static void on_aliasing_toggle(GtkMenuItem*, gpointer) {
     gtk_widget_queue_draw(drawing_area);
 }
 
-//————————————————————————————————————————————————————————————————————
-// GTK MENU CALLBACKS FOR SCENE LOAD/SAVE
 
 static void on_load_scene_activate(GtkMenuItem*, gpointer) {
     GtkWidget *dialog = gtk_file_chooser_dialog_new(
@@ -1260,8 +1206,6 @@ static void on_save_scene_activate(GtkMenuItem*, gpointer) {
     gtk_widget_destroy(dialog);
 }
 
-//————————————————————————————————————————————————————————————————————
-// GTK MENU CREATION
 
 GtkWidget* create_main_menu() {
     GtkWidget *menubar = gtk_menu_bar_new();
@@ -1321,8 +1265,6 @@ GtkWidget* create_main_menu() {
     return menubar;
 }
 
-//————————————————————————————————————————————————————————————————————
-// SCENE LOADER & SAVER (supports cubes, cylinders, spheres, cones)
 
 bool loadScene(const std::string& filename) {
     std::ifstream in(filename);
@@ -1336,8 +1278,8 @@ bool loadScene(const std::string& filename) {
     while (std::getline(in, line)) {
         ++lineNo;
         auto firstNonSpace = line.find_first_not_of(" \t\r\n");
-        if (firstNonSpace == string::npos) continue;    // blank
-        if (line[firstNonSpace] == '#') continue;       // comment
+        if (firstNonSpace == string::npos) continue;    
+        if (line[firstNonSpace] == '#') continue;       
 
         std::istringstream iss(line);
         string token;
@@ -1536,11 +1478,9 @@ bool saveScene(const std::string& filename) {
     return true;
 }
 
-//————————————————————————————————————————————————————————————————————
-// MAIN: INITIALIZE, SET UP GTK, AND RUN
 
 int main(int argc, char *argv[]) {
-    // 1) If a scene filename is provided, load it first:
+
     if (argc > 1) {
         std::string sceneFile = argv[1];
         if (!loadScene(sceneFile)) {
@@ -1548,11 +1488,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // 2) Create a blank white image to draw on
     image = cv::Mat::zeros(600, 800, CV_8UC3);
     image.setTo(cv::Scalar(255,255,255));
 
-    // 3) Initialize GTK
     gtk_init(&argc, &argv);
 
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -1563,18 +1501,15 @@ int main(int argc, char *argv[]) {
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(window), vbox);
 
-    // 4) Add the menu bar
     GtkWidget *menuBar = create_main_menu();
     gtk_box_pack_start(GTK_BOX(vbox), menuBar, FALSE, FALSE, 0);
 
-    // 5) Create a drawing area
     drawing_area = gtk_drawing_area_new();
     gtk_widget_set_hexpand(drawing_area, TRUE);
     gtk_widget_set_vexpand(drawing_area, TRUE);
-    gtk_widget_set_can_focus(drawing_area, TRUE); // allow focus for Shift detection
+    gtk_widget_set_can_focus(drawing_area, TRUE); 
     gtk_box_pack_start(GTK_BOX(vbox), drawing_area, TRUE, TRUE, 0);
 
-    // 6) Set up event masks and signals
     gtk_widget_add_events(drawing_area,
         GDK_BUTTON_PRESS_MASK |
         GDK_SCROLL_MASK      |
