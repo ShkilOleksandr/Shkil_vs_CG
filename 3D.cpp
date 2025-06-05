@@ -1402,9 +1402,8 @@ bool saveScene(const std::string& filename) {
         return false;
     }
 
-    // Write cubes first
+    // cubes
     for (const auto &c : cubes) {
-        // "cube cx cy cz side"
         out << "cube "
             << c.center.x << " "
             << c.center.y << " "
@@ -1417,9 +1416,9 @@ bool saveScene(const std::string& filename) {
             << R(2,0) << " " << R(2,1) << " " << R(2,2) << "\n";
     }
 
-    // Then write cylinders
+    // cylinders
     for (const auto &c : cylinders) {
-        // "cylinder cx cy cz radius height subdivisions"
+
         out << "cylinder "
             << c.center.x << " "
             << c.center.y << " "
@@ -1434,9 +1433,9 @@ bool saveScene(const std::string& filename) {
             << R(2,0) << " " << R(2,1) << " " << R(2,2) << "\n";
     }
 
-    // Then write spheres
+    // spheres
     for (const auto &s : spheres) {
-        // "sphere cx cy cz radius latBands lonBands"
+    
         out << "sphere "
             << s.center.x << " "
             << s.center.y << " "
@@ -1451,9 +1450,9 @@ bool saveScene(const std::string& filename) {
             << R(2,0) << " " << R(2,1) << " " << R(2,2) << "\n";
     }
 
-    // Finally write cones
+    // cones
     for (const auto &c : cones) {
-        // "cone cx cy cz radius height subdivisions"
+        
         out << "cone "
             << c.center.x << " "
             << c.center.y << " "
